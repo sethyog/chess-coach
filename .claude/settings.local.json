@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Volumes/workplace/P-projects/chess-coach/server/evals/datasets /Volumes/workplace/P-projects/chess-coach/server/evals/deterministic /Volumes/workplace/P-projects/chess-coach/server/evals/fact_adherence)",
+      "Bash(npm run *)",
+      "Bash(node evals/fact_adherence/coaching_adherence.eval.js)",
+      "Bash(node evals/deterministic/position_facts.eval.js)",
+      "Bash(node evals/fact_adherence/fact_checks.js)"
+    ],
+    "additionalDirectories": [
+      "/Volumes/workplace/P-projects/chess-coach/server/evals"
+    ]
+  }
+}

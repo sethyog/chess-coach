@@ -1,0 +1,379 @@
+'use strict';
+
+const express = require('express');
+const router = express.Router();
+const { query } = require('../db');
+const { logCandidate } = require('../principle-candidates');
+const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
+const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
+
+async function updateConceptualProfile(userId) {
+  const recent = (await query(
+    `SELECT c.role, c.content
+     FROM conversations c
+     JOIN moves m ON m.id = c.move_id
+     JOIN games g ON g.id = m.game_id
+     WHERE g.user_id = $1
+     ORDER BY c.created_at DESC
+     LIMIT 5`,
+    [userId]
+  )).rows.reverse();
+
+  if (recent.length === 0) return;
+
+  const transcript = recent.map(c => `${c.role}: ${c.content}`).join('\n\n');
+  const prompt = `Based on these chess coaching conversations, summarise in 2-3 sentences what chess concepts this player clearly understands and what they consistently get wrong. Be specific to chess concepts, not general observations.
+
+${transcript}`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-opus-4-7',
+      max_tokens: 300,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '<no body>');
+    throw new Error(`Anthropic ${response.status}: ${errBody}`);
+  }
+
+  const data = await response.json();
+  const summary = data.content?.[0]?.text?.trim();
+  if (!summary) return;
+
+  await query(
+    `UPDATE player_profile SET conceptual_profile = $1, profile_updated_at = NOW() WHERE user_id = $2`,
+    [summary, userId]
+  );
+  console.log(`Conceptual profile updated for user ${userId}.`);
+}
+
+async function getOwnedMove(moveId, userId) {
+  return (await query(
+    `SELECT m.id FROM moves m JOIN games g ON g.id = m.game_id WHERE m.id = $1 AND g.user_id = $2`,
+    [moveId, userId]
+  )).rows[0];
+}
+
+// Get conversation history for a move.
+router.get('/conversation/:moveId', async (req, res) => {
+  if (!await getOwnedMove(req.params.moveId, req.user.id)) {
+    return res.status(404).json({ error: 'Move not found' });
+  }
+  const messages = (await query(
+    'SELECT role, content FROM conversations WHERE move_id = $1 ORDER BY created_at',
+    [req.params.moveId]
+  )).rows;
+  res.json(messages);
+});
+
+// Send a message to the coach.
+router.post('/conversation/:moveId', async (req, res) => {
+  const { moveId } = req.params;
+  const { message } = req.body;
+
+  if (!await getOwnedMove(moveId, req.user.id)) {
+    return res.status(404).json({ error: 'Move not found' });
+  }
+
+  await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'user', message]);
+
+  const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [req.user.id])).rows[0];
+
+  const history = (await query(
+    'SELECT role, content FROM conversations WHERE move_id = $1 ORDER BY created_at',
+    [moveId]
+  )).rows;
+
+  const moveRow = (await query(
+    `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
+            m.classification, m.centipawn_loss, m.principle_violated, g.pgn
+       FROM moves m
+       JOIN games g ON g.id = m.game_id
+      WHERE m.id = $1`,
+    [moveId]
+  )).rows[0];
+
+  // Build (or read cached) verified facts.
+  let facts = null;
+  const cachedRow = (await query('SELECT facts FROM coaching_facts WHERE move_id = $1', [moveId])).rows[0];
+  if (cachedRow?.facts) {
+    try {
+      const parsed = JSON.parse(cachedRow.facts);
+      if (parsed && parsed.ok) facts = parsed;
+    } catch (err) {
+      console.error(`Cached facts for move ${moveId} failed to parse:`, err);
+    }
+  }
+
+  if (!facts) {
+    try {
+      if (moveRow?.pgn) {
+        const fenBefore = reconstructBeforeFen(moveRow.pgn, moveRow.move_number, moveRow.move);
+        if (fenBefore) {
+          const built = buildPositionFacts({
+            fenBefore,
+            playedMoveSan: moveRow.move,
+            classification: moveRow.classification,
+            centipawnLoss: moveRow.centipawn_loss,
+          });
+          if (built && built.ok) {
+            facts = built;
+            try {
+              await query(
+                'INSERT INTO coaching_facts (move_id, facts, computed_at) VALUES ($1, $2, NOW()) ON CONFLICT (move_id) DO UPDATE SET facts = EXCLUDED.facts, computed_at = NOW()',
+                [moveId, JSON.stringify(facts)]
+              );
+            } catch (cacheErr) {
+              console.error(`Failed to cache coaching facts for move ${moveId}:`, cacheErr);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Position facts construction failed:', err);
+    }
+  }
+
+  if (!facts) {
+    console.warn(`Coach falling back to degraded prompt for move ${moveId} (no verified facts).`);
+  }
+
+  const systemPrompt = facts
+    ? buildVerifiedFactsPrompt({ facts, profile, principleViolated: moveRow?.principle_violated })
+    : buildDegradedPrompt({
+        profile,
+        moveSan: moveRow?.move,
+        classification: moveRow?.classification,
+        centipawnLoss: moveRow?.centipawn_loss,
+        principleViolated: moveRow?.principle_violated,
+      });
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-7',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: history.map(h => ({ role: h.role, content: h.content })),
+      }),
+    });
+
+    const data = await response.json();
+    const reply = data.content?.[0]?.text || "I couldn't process that. Try again.";
+
+    await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'assistant', reply]);
+
+    res.json({ reply });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  // Best-effort: refresh conceptual_profile every 3rd conversation row (scoped to this user).
+  try {
+    const totalRow = (await query(
+      `SELECT COUNT(*)::int AS n
+       FROM conversations c
+       JOIN moves m ON m.id = c.move_id
+       JOIN games g ON g.id = m.game_id
+       WHERE g.user_id = $1`,
+      [req.user.id]
+    )).rows[0];
+    if (totalRow.n % 3 === 0) {
+      updateConceptualProfile(req.user.id).catch(err =>
+        console.error('Conceptual profile update failed:', err)
+      );
+    }
+  } catch (err) {
+    console.error('Conceptual profile trigger check failed:', err);
+  }
+});
+
+// Latest stored pattern analysis for THIS user.
+router.get('/patterns/latest', async (req, res) => {
+  const row = (await query(
+    `SELECT * FROM pattern_analyses WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [req.user.id]
+  )).rows[0];
+
+  if (!row) return res.json({ patterns: null });
+
+  try {
+    const results = JSON.parse(row.results);
+    res.json(results);
+  } catch (e) {
+    console.error('Failed to parse stored pattern_analyses.results:', e);
+    res.json({ patterns: null });
+  }
+});
+
+// Pattern recognition across this user's 5 most recent games.
+router.post('/patterns', async (req, res) => {
+  try {
+    const games = (await query(
+      `SELECT id, opponent, played_at FROM games WHERE user_id = $1 ORDER BY played_at DESC LIMIT 5`,
+      [req.user.id]
+    )).rows;
+    const analysedAt = new Date().toISOString();
+
+    if (games.length < 3) {
+      return res.json({ patterns: [], gamesAnalysed: games.length, gamesSummary: games, totalMistakesMapped: 0, analysedAt });
+    }
+
+    const gameIds = games.map(g => g.id);
+    const placeholders = gameIds.map((_, i) => `$${i + 1}`).join(',');
+    const moves = (await query(
+      `SELECT id, game_id, move_number, move, classification
+       FROM moves
+       WHERE game_id IN (${placeholders})
+       AND classification IN ('blunder', 'mistake')
+       ORDER BY game_id, move_number`,
+      gameIds
+    )).rows;
+
+    if (moves.length === 0) {
+      return res.json({ patterns: [], gamesAnalysed: games.length, gamesSummary: games, totalMistakesMapped: 0, analysedAt });
+    }
+
+    const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [req.user.id])).rows[0];
+    const level = profile?.computed_level || 'intermediate';
+    let principles = (await query('SELECT * FROM principles WHERE level = $1 ORDER BY id', [level])).rows;
+    if (principles.length === 0) {
+      principles = (await query('SELECT * FROM principles ORDER BY id')).rows;
+    }
+
+    const principlesBlock = principles.map(p => `${p.id}: ${p.name} — ${p.description}`).join('\n');
+    const movesBlock = moves.map(m => `Game ${m.game_id} Move ${m.move_number} (${m.move}) — ${m.classification}`).join('\n');
+
+    const mappingPrompt = `Map each move below to EXACTLY ONE principle it violates from the provided list.
+Return ONLY a JSON array, no markdown, no preamble:
+[{ "gameId": 1, "moveRef": "Game 1 Move 14", "principleId": "P02", "reasoning": "one sentence explanation" }]
+
+If a move does not clearly match any principle from the list, use principleId: "OTHER", explain in reasoning, AND include "suggestedName": a 4-8 word principle name. Style it like the existing list — a positive imperative or rule of thumb ("Don't trade off your active pieces"), not a description of the mistake.
+
+PRINCIPLES:
+${principlesBlock}
+
+MOVES:
+${movesBlock}`;
+
+    let mappings;
+    try {
+      const mapResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-opus-4-7', max_tokens: 8000, messages: [{ role: 'user', content: mappingPrompt }] }),
+      });
+      if (!mapResp.ok) {
+        const errBody = await mapResp.text().catch(() => '<no body>');
+        throw new Error(`Anthropic ${mapResp.status}: ${errBody}`);
+      }
+      const mapData = await mapResp.json();
+      const text = mapData.content?.[0]?.text || '';
+      const cleaned = text.replace(/```json|```/g, '').trim();
+      if (!cleaned) {
+        console.error('Pattern mapping returned empty text. stop_reason:', mapData.stop_reason, 'content:', JSON.stringify(mapData.content));
+        throw new Error('Mapping response had empty text');
+      }
+      const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+      const toParse = arrayMatch ? arrayMatch[0] : cleaned;
+      try {
+        mappings = JSON.parse(toParse);
+      } catch (parseErr) {
+        console.error('Pattern mapping JSON parse failed. stop_reason:', mapData.stop_reason, 'text preview:', cleaned.slice(0, 500));
+        throw parseErr;
+      }
+      if (!Array.isArray(mappings)) throw new Error('Mapping response was not a JSON array');
+    } catch (err) {
+      console.error('Pattern mapping call failed:', err);
+      return res.json({ patterns: [], gamesAnalysed: games.length, gamesSummary: games, totalMistakesMapped: 0, analysedAt, error: 'Analysis failed — try again' });
+    }
+
+    const otherMappings = mappings.filter(m => m && m.principleId === 'OTHER' && typeof m.suggestedName === 'string' && m.suggestedName.trim());
+    for (const m of otherMappings) {
+      try {
+        await logCandidate(m.suggestedName, req.user.id, level);
+      } catch (err) {
+        console.error(`logCandidate failed for "${m.suggestedName}":`, err);
+      }
+    }
+
+    const buckets = new Map();
+    for (const m of mappings) {
+      if (!m || typeof m.principleId !== 'string') continue;
+      const pid = m.principleId;
+      if (!buckets.has(pid)) buckets.set(pid, { principleId: pid, gameIds: new Set(), moveRefs: [], reasonings: [] });
+      const b = buckets.get(pid);
+      if (m.gameId != null) b.gameIds.add(m.gameId);
+      if (m.moveRef) b.moveRefs.push(m.moveRef);
+      if (m.reasoning) b.reasonings.push(m.reasoning);
+    }
+
+    const candidates = [...buckets.values()]
+      .map(b => ({ principleId: b.principleId, gamesAffected: [...b.gameIds], movesViolating: b.moveRefs, reasonings: b.reasonings, frequency: b.gameIds.size }))
+      .filter(b => b.frequency >= 2)
+      .sort((a, b) => b.frequency - a.frequency);
+
+    const principleMap = new Map(principles.map(p => [p.id, p]));
+    const patterns = [];
+
+    for (const cand of candidates) {
+      const principle = principleMap.get(cand.principleId);
+      const name = principle?.name || (cand.principleId === 'OTHER' ? 'Other (uncategorised)' : cand.principleId);
+      const description = principle?.description || '';
+
+      const summaryPrompt = `In 2 sentences, explain this recurring pattern to a ${level} chess player and what they should specifically focus on to fix it.
+Principle: ${name} — ${description}
+Violated in: ${cand.movesViolating.join(', ')}
+Reasoning per move:
+${cand.reasonings.map(r => `- ${r}`).join('\n')}`;
+
+      let coachSummary = '';
+      try {
+        const sumResp = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-opus-4-7', max_tokens: 300, messages: [{ role: 'user', content: summaryPrompt }] }),
+        });
+        if (!sumResp.ok) {
+          const errBody = await sumResp.text().catch(() => '<no body>');
+          throw new Error(`Anthropic ${sumResp.status}: ${errBody}`);
+        }
+        const sumData = await sumResp.json();
+        coachSummary = sumData.content?.[0]?.text?.trim() || '';
+      } catch (err) {
+        console.error(`Coach summary call failed for ${cand.principleId}:`, err);
+      }
+
+      patterns.push({ principleId: cand.principleId, principleName: name, frequency: cand.frequency, gamesAffected: cand.gamesAffected, movesViolating: cand.movesViolating, coachSummary, reasonings: cand.reasonings });
+    }
+
+    const results = { patterns, gamesAnalysed: games.length, gamesSummary: games, totalMistakesMapped: mappings.length, analysedAt };
+
+    await query(
+      'INSERT INTO pattern_analyses (user_id, game_ids, results) VALUES ($1, $2, $3)',
+      [req.user.id, JSON.stringify(gameIds), JSON.stringify(results)]
+    );
+
+    res.json(results);
+  } catch (e) {
+    console.error('Pattern analysis failed:', e);
+    return res.status(500).json({ patterns: [], error: 'Analysis failed — try again' });
+  }
+});
+
+module.exports = router;

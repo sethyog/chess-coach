@@ -1,0 +1,96 @@
+[
+  {
+    "id": "screenshot_bug",
+    "_note": "Evans Gambit after 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.b4. Black to move. The original bug: coach hallucinated a black knight on b2. This position has b2 empty (white pawn advanced to b4) and no black knight can reach b2 in one move (c6 and g8 knights are both wrong L-shape distance). 'Nb2' is used as the illegalMove to directly guard the bug regression.",
+    "fen": "r1bqk1nr/pppp1ppp/2n5/2b1p3/1PB1P3/5N2/P1PP1PPP/RNBQK2R b KQkq b3 0 4",
+    "played_move": "Bxb4",
+    "expected": {
+      "sideToMove": "black",
+      "pieceAnchors": [
+        { "square": "b4", "piece": "p", "color": "w" },
+        { "square": "c4", "piece": "b", "color": "w" },
+        { "square": "c5", "piece": "b", "color": "b" },
+        { "square": "c6", "piece": "n", "color": "b" },
+        { "square": "f3", "piece": "n", "color": "w" }
+      ],
+      "emptySquares": ["b2"],
+      "legalMove": "Bxb4",
+      "illegalMove": "Nb2"
+    }
+  },
+  {
+    "id": "midgame_sicilian_najdorf",
+    "_note": "DELIBERATELY WRONG: expected.sideToMove is 'black' but the FEN has white to move (w). Fix this value to 'white' after confirming the eval fails on this case.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Bg5",
+    "expected": {
+      "sideToMove": "white",
+      "pieceAnchors": [
+        { "square": "d4", "piece": "n", "color": "w" },
+        { "square": "c3", "piece": "n", "color": "w" },
+        { "square": "f6", "piece": "n", "color": "b" },
+        { "square": "a6", "piece": "p", "color": "b" },
+        { "square": "e4", "piece": "p", "color": "w" }
+      ],
+      "emptySquares": [],
+      "legalMove": "Bg5",
+      "illegalMove": "Qd5"
+    }
+  },
+  {
+    "id": "endgame_kp_white_to_move",
+    "_note": "K+P vs K. The pawn on d2 is blocked by its own king on d3 so it has no legal moves. played_move is the ILLEGAL Kd4 — test expects playedMoveValid=false.",
+    "fen": "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1",
+    "played_move": "Kd4",
+    "expected": {
+      "sideToMove": "white",
+      "pieceAnchors": [
+        { "square": "d3", "piece": "k", "color": "w" },
+        { "square": "d5", "piece": "k", "color": "b" },
+        { "square": "d2", "piece": "p", "color": "w" }
+      ],
+      "emptySquares": ["d4", "e4", "c4"],
+      "legalMove": "Ke3",
+      "illegalMove": "Kd4",
+      "expectPlayedMoveValid": false
+    }
+  },
+  {
+    "id": "black_to_move_ruy_lopez",
+    "_note": "After 1.e4 e5 2.Nf3 Nc6 3.Bb5. Black to move. e4 is blocked by white pawn — cannot be played by black.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "expected": {
+      "sideToMove": "black",
+      "pieceAnchors": [
+        { "square": "b5", "piece": "b", "color": "w" },
+        { "square": "c6", "piece": "n", "color": "b" },
+        { "square": "e5", "piece": "p", "color": "b" },
+        { "square": "e4", "piece": "p", "color": "w" },
+        { "square": "f3", "piece": "n", "color": "w" }
+      ],
+      "emptySquares": ["d5", "f5"],
+      "legalMove": "a6",
+      "illegalMove": "e4"
+    }
+  },
+  {
+    "id": "castling_available",
+    "_note": "After 1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 4.O-O Nf6 5.d3. Black to move; O-O (kingside castle) is legal. O-O-O is blocked by the c8 bishop. Rg5 is illegal (h7 pawn blocks h-file, no rook can reach g5 in one move).",
+    "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQ1RK1 b kq - 0 5",
+    "played_move": "O-O",
+    "expected": {
+      "sideToMove": "black",
+      "pieceAnchors": [
+        { "square": "c4", "piece": "b", "color": "w" },
+        { "square": "c5", "piece": "b", "color": "b" },
+        { "square": "g1", "piece": "k", "color": "w" },
+        { "square": "e8", "piece": "k", "color": "b" },
+        { "square": "h8", "piece": "r", "color": "b" }
+      ],
+      "emptySquares": ["f8", "g8"],
+      "legalMove": "O-O",
+      "illegalMove": "Rg5"
+    }
+  }
+]

@@ -1,0 +1,132 @@
+[
+  {
+    "id": "clean_reply_no_violations",
+    "_note": "Clean Socratic reply. No piece positions, no side-to-move claims, no suggested moves. Should have zero violations.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "What were you hoping to achieve with that move? Sometimes it helps to think about what threat you were trying to address first.",
+    "expected_violations": []
+  },
+  {
+    "id": "correct_side_to_move_claim",
+    "_note": "Reply correctly identifies Black to move. Should NOT flag CHECK 2.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "Since it's Black's move here, you had a few options for dealing with the bishop. What made you choose a6 over, say, developing a piece?",
+    "expected_violations": []
+  },
+  {
+    "id": "wrong_side_to_move_claim",
+    "_note": "Position is Black to move but reply claims White to move. CHECK 2 should fire.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "It's White's turn here, and you need to decide how to handle the bishop on b5. What were you thinking?",
+    "expected_violations": ["side_to_move"]
+  },
+  {
+    "id": "correct_piece_position_claim",
+    "_note": "Reply correctly references the white bishop on b5. CHECK 1 should NOT fire.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "The bishop on b5 is putting pressure on your knight. With a6, you attacked it directly — good instinct to address threats! What did you expect White to do in response?",
+    "expected_violations": []
+  },
+  {
+    "id": "wrong_piece_on_square_claim",
+    "_note": "Reply claims a knight on b5, but b5 has the white BISHOP. CHECK 1 should fire (wrong piece type on that square).",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "The knight on b5 is creating problems for you. What were you hoping to do about that knight with your move a6?",
+    "expected_violations": ["piece_position"]
+  },
+  {
+    "id": "piece_on_empty_square_claim",
+    "_note": "Reply claims there is a rook on d5, but d5 is empty. CHECK 1 should fire.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "classification": "mistake",
+    "centipawn_loss": 45,
+    "stored_reply": "The rook on d5 is controlling the center, which made your move a bit risky. What were you thinking about the rook on d5?",
+    "expected_violations": ["piece_position"]
+  },
+  {
+    "id": "proposed_illegal_move",
+    "_note": "Reply proposes Qd5 as a suggestion. In this position (Sicilian Najdorf, white to move), the white queen on d1 cannot reach d5 because the d4 knight blocks the d-file. CHECK 3 (move legality) should fire.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Be2",
+    "classification": "inaccuracy",
+    "centipawn_loss": 20,
+    "stored_reply": "You could play Qd5 to control the center and attack the a8 rook at the same time. What do you think about that idea?",
+    "expected_violations": ["move_legality"]
+  },
+  {
+    "id": "past_move_reference_not_flagged",
+    "_note": "Reply references Nxd4 as a past move that already happened ('the move you just played'). CHECK 3 must NOT flag this — past/historical move references are excluded from legality checking.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Be2",
+    "classification": "inaccuracy",
+    "centipawn_loss": 20,
+    "stored_reply": "After the recapture Nxd4 that already happened, White gained central control. How are you thinking about developing from here?",
+    "expected_violations": []
+  },
+  {
+    "id": "hypothetical_past_not_flagged",
+    "_note": "Reply says 'if you had played Ng4 three moves ago'. This is a hypothetical past move, CHECK 3 must NOT flag it even though Ng4 may or may not be legal in the current position.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Be2",
+    "classification": "inaccuracy",
+    "centipawn_loss": 20,
+    "stored_reply": "If you had played Ng4 three moves ago, the position would have been quite different. What was your plan when you chose this developing move instead?",
+    "expected_violations": []
+  },
+  {
+    "id": "legal_suggestion_not_flagged",
+    "_note": "Reply suggests Bg5 which IS legal (bishop c1 can go to g5 pinning the f6 knight). CHECK 3 must NOT flag it.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Be2",
+    "classification": "inaccuracy",
+    "centipawn_loss": 20,
+    "stored_reply": "Consider Bg5 here — it pins the knight on f6 to the queen. Does that change how you're thinking about the position?",
+    "expected_violations": []
+  },
+  {
+    "id": "endgame_correct_reply",
+    "_note": "Endgame K+P vs K position (white to move). Clean reply with no claims. Zero violations expected.",
+    "fen": "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1",
+    "played_move": "Ke3",
+    "classification": "mistake",
+    "centipawn_loss": 80,
+    "stored_reply": "In king-and-pawn endings, king activity is everything. Where do you think the king needs to go to help the pawn advance?",
+    "expected_violations": []
+  },
+  {
+    "id": "endgame_wrong_side_to_move",
+    "_note": "Position is White to move but reply says 'Black to play'. CHECK 2 should fire.",
+    "fen": "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1",
+    "played_move": "Ke3",
+    "classification": "mistake",
+    "centipawn_loss": 80,
+    "stored_reply": "Black to play here — the king has to decide which direction to go. What were you thinking with Ke3?",
+    "expected_violations": ["side_to_move"]
+  },
+  {
+    "id": "castling_position_suggests_illegal_castle",
+    "_note": "Position where black can castle kingside. Reply suggests O-O-O (queenside) which is ILLEGAL here (path blocked by c8 bishop). CHECK 3 should fire.",
+    "fen": "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQ1RK1 b kq - 0 5",
+    "played_move": "O-O",
+    "classification": "inaccuracy",
+    "centipawn_loss": 15,
+    "stored_reply": "You could try O-O-O to bring your rook to the center quickly. What made you choose kingside castling instead?",
+    "expected_violations": ["move_legality"]
+  }
+]

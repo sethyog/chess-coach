@@ -1,0 +1,134 @@
+[
+  {
+    "id": "no_theme_null",
+    "_note": "No theme at all → cannot resource the principle with puzzles → auto_reject regardless of similarity or frequency.",
+    "input": {
+      "proposed_lichess_theme": null,
+      "similarity_score": 0.3,
+      "occurrence_count": 10,
+      "distinct_user_count": 5
+    },
+    "expected": "auto_reject"
+  },
+  {
+    "id": "no_theme_empty_string",
+    "_note": "Empty string theme treated same as no theme.",
+    "input": {
+      "proposed_lichess_theme": "",
+      "similarity_score": 0.3,
+      "occurrence_count": 10,
+      "distinct_user_count": 5
+    },
+    "expected": "auto_reject"
+  },
+  {
+    "id": "invalid_theme_not_in_allowlist",
+    "_note": "Theme string that is not in the LICHESS_THEMES set → auto_reject.",
+    "input": {
+      "proposed_lichess_theme": "fakeThemeNotInList",
+      "similarity_score": 0.3,
+      "occurrence_count": 10,
+      "distinct_user_count": 5
+    },
+    "expected": "auto_reject"
+  },
+  {
+    "id": "high_similarity_clear_duplicate",
+    "_note": "CRITICAL: similarity >= SIMILARITY_HIGH (0.80) must NEVER route to auto_approve. A duplicate slipping into the live vocabulary is the worst-case failure.",
+    "input": {
+      "proposed_lichess_theme": "pin",
+      "similarity_score": 0.92,
+      "occurrence_count": 10,
+      "distinct_user_count": 5
+    },
+    "expected": "human_review"
+  },
+  {
+    "id": "high_similarity_at_exact_threshold",
+    "_note": "similarity_score = SIMILARITY_HIGH (0.80 exactly) — boundary: >= check means this routes to human_review, not auto_approve.",
+    "input": {
+      "proposed_lichess_theme": "fork",
+      "similarity_score": 0.80,
+      "occurrence_count": 5,
+      "distinct_user_count": 3
+    },
+    "expected": "human_review"
+  },
+  {
+    "id": "high_similarity_despite_high_frequency",
+    "_note": "Even very high frequency (many users) cannot override the similarity gate — human must review potential duplicates.",
+    "input": {
+      "proposed_lichess_theme": "fork",
+      "similarity_score": 0.85,
+      "occurrence_count": 50,
+      "distinct_user_count": 20
+    },
+    "expected": "human_review"
+  },
+  {
+    "id": "low_similarity_freq_met_auto_approve",
+    "_note": "similarity < SIMILARITY_LOW (0.60) AND occurrence_count >= MIN_OCCURRENCE (3) AND distinct_user_count >= MIN_DISTINCT_USERS (2) → auto_approve.",
+    "input": {
+      "proposed_lichess_theme": "endgame",
+      "similarity_score": 0.45,
+      "occurrence_count": 7,
+      "distinct_user_count": 4
+    },
+    "expected": "auto_approve"
+  },
+  {
+    "id": "low_similarity_exactly_at_minimum_freq",
+    "_note": "similarity = 0.59 (just under SIMILARITY_LOW), occurrence_count = MIN_OCCURRENCE exactly, distinct_user_count = MIN_DISTINCT_USERS exactly → auto_approve.",
+    "input": {
+      "proposed_lichess_theme": "fork",
+      "similarity_score": 0.59,
+      "occurrence_count": 3,
+      "distinct_user_count": 2
+    },
+    "expected": "auto_approve"
+  },
+  {
+    "id": "low_similarity_insufficient_occurrences",
+    "_note": "Good similarity and theme, but occurrence_count (2) < MIN_OCCURRENCE (3) → hold (not enough pattern evidence yet).",
+    "input": {
+      "proposed_lichess_theme": "fork",
+      "similarity_score": 0.40,
+      "occurrence_count": 2,
+      "distinct_user_count": 2
+    },
+    "expected": "hold"
+  },
+  {
+    "id": "low_similarity_insufficient_distinct_users",
+    "_note": "Enough occurrences but only 1 distinct user — could be one player's quirk, not a real pattern. distinct_user_count (1) < MIN_DISTINCT_USERS (2) → hold.",
+    "input": {
+      "proposed_lichess_theme": "skewer",
+      "similarity_score": 0.40,
+      "occurrence_count": 5,
+      "distinct_user_count": 1
+    },
+    "expected": "hold"
+  },
+  {
+    "id": "similarity_at_low_boundary_not_strictly_less",
+    "_note": "similarity_score = SIMILARITY_LOW (0.60 exactly) — the check is `< SIMILARITY_LOW` so 0.60 does NOT satisfy it. Falls into middle band (0.60-0.80) → human_review.",
+    "input": {
+      "proposed_lichess_theme": "pin",
+      "similarity_score": 0.60,
+      "occurrence_count": 4,
+      "distinct_user_count": 3
+    },
+    "expected": "human_review"
+  },
+  {
+    "id": "middle_band_judgment_call",
+    "_note": "0.60 < similarity < 0.80, has valid theme, freq met — middle band, judgment call → human_review.",
+    "input": {
+      "proposed_lichess_theme": "kingsideAttack",
+      "similarity_score": 0.72,
+      "occurrence_count": 6,
+      "distinct_user_count": 4
+    },
+    "expected": "human_review"
+  }
+]
