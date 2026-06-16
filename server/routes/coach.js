@@ -65,20 +65,28 @@ async function getOwnedMove(moveId, userId) {
 
 // Get conversation history for a move.
 router.get('/conversation/:moveId', async (req, res) => {
-  if (!await getOwnedMove(req.params.moveId, req.user.id)) {
+  const moveId = parseInt(req.params.moveId, 10);
+  if (!Number.isInteger(moveId) || moveId <= 0) {
+    return res.status(400).json({ error: 'Invalid moveId: must be a positive integer' });
+  }
+  if (!await getOwnedMove(moveId, req.user.id)) {
     return res.status(404).json({ error: 'Move not found' });
   }
   const messages = (await query(
     'SELECT role, content FROM conversations WHERE move_id = $1 ORDER BY created_at',
-    [req.params.moveId]
+    [moveId]
   )).rows;
   res.json(messages);
 });
 
 // Send a message to the coach.
 router.post('/conversation/:moveId', async (req, res) => {
-  const { moveId } = req.params;
+  const moveId = parseInt(req.params.moveId, 10);
   const { message } = req.body;
+
+  if (!Number.isInteger(moveId) || moveId <= 0) {
+    return res.status(400).json({ error: 'Invalid moveId: must be a positive integer' });
+  }
 
   if (!await getOwnedMove(moveId, req.user.id)) {
     return res.status(404).json({ error: 'Move not found' });
