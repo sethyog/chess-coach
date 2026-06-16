@@ -162,9 +162,10 @@ export default function GameReview() {
       try {
         await api.post(`/games/${id}/moves`, { moves: analysed });
         if (cancelled) return;
-        // The server returns { saved: N }, not the move rows. Use the
-        // locally-computed array directly — we just persisted exactly this.
-        setMoves(analysed);
+        // Re-fetch so moves have their database-assigned IDs (needed for
+        // coaching navigation).
+        const { data: refreshed } = await api.get(`/games/${id}`);
+        if (!cancelled) setMoves(refreshed.moves || []);
       } catch (err) {
         if (!cancelled) {
           setAnalysisStatus('error');
@@ -312,7 +313,7 @@ export default function GameReview() {
                 <div
                   key={m.id}
                   className="flagged-row"
-                  onClick={() => navigate(`/game/${id}/move/${m.id}`)}
+                  onClick={() => m.id != null && navigate(`/game/${id}/move/${m.id}`)}
                 >
                   <span className="move-no">{m.move_number}.</span>
                   <div>
