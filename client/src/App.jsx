@@ -6,6 +6,7 @@ import {
   Navigate,
   useLocation,
 } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard.jsx';
 import GameReview from './pages/GameReview.jsx';
 import Coaching from './pages/Coaching.jsx';
@@ -14,6 +15,7 @@ import PatternAnalysis from './pages/PatternAnalysis.jsx';
 import Admin from './pages/Admin.jsx';
 import Login from './pages/Login.jsx';
 import { AuthProvider, useAuth } from './AuthContext.jsx';
+import { api } from './api.js';
 
 // Renders the Login screen in place of any protected content until /auth/me
 // has confirmed a session. Once logged in, children render normally.
@@ -32,10 +34,27 @@ function RequireAuth({ children }) {
 
 function OnboardingGate({ children }) {
   const location = useLocation();
-  const done =
-    typeof window !== 'undefined' &&
-    localStorage.getItem('onboardingComplete');
-  if (!done && location.pathname !== '/onboarding') {
+  // Fast path: localStorage is set on this device already.
+  const [status, setStatus] = useState(
+    localStorage.getItem('onboardingComplete') ? 'done' : 'loading'
+  );
+
+  useEffect(() => {
+    if (status !== 'loading') return;
+    // No localStorage flag — check the server to avoid re-asking users who
+    // already submitted a rating on a different device.
+    api.get('/profile').then(({ data }) => {
+      if (data?.reported_rating != null) {
+        localStorage.setItem('onboardingComplete', '1');
+        setStatus('done');
+      } else {
+        setStatus('needed');
+      }
+    }).catch(() => setStatus('needed'));
+  }, [status]);
+
+  if (status === 'loading') return null;
+  if (status === 'needed' && location.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }
   return children;
