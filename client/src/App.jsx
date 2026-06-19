@@ -99,15 +99,26 @@ function HeaderRight() {
   );
 }
 
+function RookMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 46 46" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M6 8 h34 a3 3 0 0 1 3 3 v20 a3 3 0 0 1 -3 3 h-19 l-8 6 v-6 h-7 a3 3 0 0 1 -3 -3 v-20 a3 3 0 0 1 3 -3 z" fill="none" stroke="#f0c060" strokeWidth="1.5" />
+      <path d="M16 14 L16 17 L18 17 L18 15.5 L20 15.5 L20 17 L22 17 L22 15.5 L24 15.5 L24 17 L26 17 L26 14 Z M17 17 L17 25 L16 25 L16 27 L26 27 L26 25 L25 25 L25 17 Z" fill="#f0c060" />
+    </svg>
+  );
+}
+
 function Shell({ children }) {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>
-          <Link to="/" style={{ color: 'var(--gold)' }}>
-            Chess Coach
-          </Link>
-        </h1>
+        <Link to="/" className="brand-lockup">
+          <RookMark />
+          <div className="brand-text">
+            <span className="brand-wordmark">Chess Sensei</span>
+            <span className="brand-tagline">Every move has a lesson.</span>
+          </div>
+        </Link>
         <HeaderRight />
       </header>
       {children}
