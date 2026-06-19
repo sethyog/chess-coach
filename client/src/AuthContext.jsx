@@ -34,7 +34,7 @@ export function AuthProvider({ children }) {
   // Google initiator. Don't fetch this; the browser must follow the
   // resulting 302 to Google's consent screen.
   function login() {
-    window.location.href = (import.meta.env.VITE_API_URL || 'http://localhost:3001/api') + '/auth/google';
+    window.location.href = (import.meta.env.VITE_API_URL || '/api') + '/auth/google';
   }
 
   // logout(): hit the server, then clear local state regardless of the
