@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { api } from '../api.js';
 
@@ -33,11 +34,36 @@ export default function Coaching() {
         if (!move) {
           setError('Move not found for this game.');
         } else {
+          // Derive from/to squares via the PGN verbose history so the board
+          // can draw an arrow showing where the piece came from.
+          let fromSquare = null;
+          let toSquare = null;
+          if (gameRes.data.pgn) {
+            try {
+              const chess = new Chess();
+              chess.loadPgn(gameRes.data.pgn);
+              const history = chess.history({ verbose: true });
+              const moveNumber = move.move_number;
+              const histEntry = history.find(
+                (h, i) =>
+                  (!moveNumber || Math.floor(i / 2) + 1 === moveNumber) &&
+                  h.san === move.move
+              );
+              if (histEntry) {
+                fromSquare = histEntry.from;
+                toSquare = histEntry.to;
+              }
+            } catch (err) {
+              console.warn('Could not derive move squares from PGN:', err);
+            }
+          }
           setMoveContext({
             move: move.move,
             classification: move.classification,
             fen: move.fen,
             principle_violated: move.principle_violated,
+            from: fromSquare,
+            to: toSquare,
           });
         }
         setMessages(convRes.data || []);
@@ -118,6 +144,17 @@ export default function Coaching() {
 
   const boardFen = useMemo(() => moveContext?.fen || 'start', [moveContext]);
 
+  const moveArrow = useMemo(() => {
+    if (!moveContext?.from || !moveContext?.to) return [];
+    return [{ startSquare: moveContext.from, endSquare: moveContext.to, color: '#f0c060' }];
+  }, [moveContext]);
+
+  const squareHighlights = useMemo(() => {
+    if (!moveContext?.from || !moveContext?.to) return {};
+    const tint = { backgroundColor: 'rgba(240, 192, 96, 0.2)' };
+    return { [moveContext.from]: tint, [moveContext.to]: tint };
+  }, [moveContext]);
+
   return (
     <>
       <div className="crumb">
@@ -143,9 +180,12 @@ export default function Coaching() {
                         id: 'coach',
                         position: boardFen,
                         allowDragging: false,
+                        allowDrawingArrows: false,
                         boardOrientation: 'white',
                         darkSquareStyle: { backgroundColor: '#3a3a40' },
                         lightSquareStyle: { backgroundColor: '#b6b6bd' },
+                        arrows: moveArrow,
+                        squareStyles: squareHighlights,
                       }}
                     />
                   </div>
