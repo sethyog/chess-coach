@@ -43,19 +43,42 @@ export default function Coaching() {
               const chess = new Chess();
               chess.loadPgn(gameRes.data.pgn);
               const history = chess.history({ verbose: true });
+
+              // Primary: match by move_number + SAN (fast, exact).
               const moveNumber = move.move_number;
               const histEntry = history.find(
                 (h, i) =>
                   (!moveNumber || Math.floor(i / 2) + 1 === moveNumber) &&
                   h.san === move.move
               );
+
               if (histEntry) {
                 fromSquare = histEntry.from;
                 toSquare = histEntry.to;
+              } else {
+                // Fallback: replay and match by the resulting FEN.
+                // Handles edge cases where SAN / move_number differ slightly.
+                const replay = new Chess();
+                for (const h of history) {
+                  replay.move(h.san);
+                  if (replay.fen() === move.fen) {
+                    fromSquare = h.from;
+                    toSquare = h.to;
+                    break;
+                  }
+                }
               }
+
+              console.log(
+                '[Coaching] move arrow: from=%s to=%s (san=%s moveNumber=%s method=%s)',
+                fromSquare, toSquare, move.move, moveNumber,
+                fromSquare ? (histEntry ? 'san' : 'fen') : 'none'
+              );
             } catch (err) {
-              console.warn('Could not derive move squares from PGN:', err);
+              console.warn('[Coaching] Could not derive move squares from PGN:', err);
             }
+          } else {
+            console.warn('[Coaching] No PGN available — move arrow disabled');
           }
           setMoveContext({
             move: move.move,
