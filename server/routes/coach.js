@@ -7,6 +7,24 @@ const { logCandidate } = require('../principle-candidates');
 const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
 const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
 
+// ── Socratic escalation constants ────────────────────────────────────────────
+const MAX_TURNS_BY_LEVEL = { beginner: 3, intermediate: 4, advanced: 5 };
+const DEFAULT_MAX_TURNS = 4;
+
+// Phrases that signal the student wants the answer now (case-insensitive substring match).
+const GIVE_UP_PHRASES = [
+  'just tell me', "i don't know", 'i give up', "what's the answer",
+  'what is the answer', 'no idea', 'show me the answer', 'tell me the answer',
+  'i have no idea', 'give me the answer', "don't know", 'answer please',
+  "i'm stuck", 'i am stuck', 'give up',
+];
+
+function detectForceAnswer(message) {
+  const lower = message.toLowerCase();
+  return GIVE_UP_PHRASES.some(phrase => lower.includes(phrase));
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function updateConceptualProfile(userId) {
   const recent = (await query(
     `SELECT c.role, c.content
@@ -96,6 +114,12 @@ router.post('/conversation/:moveId', async (req, res) => {
     [moveId]
   )).rows;
 
+  // Socratic escalation: turn 1 = first coach reply, turn N = Nth reply.
+  const currentTurn = history.filter(h => h.role === 'assistant').length + 1;
+  const level = profile?.computed_level || 'intermediate';
+  const maxTurns = MAX_TURNS_BY_LEVEL[level] ?? DEFAULT_MAX_TURNS;
+  const forceAnswer = detectForceAnswer(message);
+
   const moveRow = (await query(
     `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
             m.classification, m.centipawn_loss, m.principle_violated, g.pgn
@@ -151,13 +175,16 @@ router.post('/conversation/:moveId', async (req, res) => {
   }
 
   const systemPrompt = facts
-    ? buildVerifiedFactsPrompt({ facts, profile, principleViolated: moveRow?.principle_violated })
+    ? buildVerifiedFactsPrompt({ facts, profile, principleViolated: moveRow?.principle_violated, currentTurn, maxTurns, forceAnswer })
     : buildDegradedPrompt({
         profile,
         moveSan: moveRow?.move,
         classification: moveRow?.classification,
         centipawnLoss: moveRow?.centipawn_loss,
         principleViolated: moveRow?.principle_violated,
+        currentTurn,
+        maxTurns,
+        forceAnswer,
       });
 
   try {

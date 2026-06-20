@@ -41,7 +41,17 @@ function fmtEvalCp(cp) {
 
 // Builds the full Socratic-coach system prompt with the verified-facts
 // block as the sole source of board truth.
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated }) {
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer }) {
+  const level = profile?.computed_level || 'intermediate';
+  const isFinalTurn = currentTurn >= maxTurns;
+
+  const levelHints = {
+    beginner: 'This player is a beginner — descend the ladder faster to reduce frustration; they benefit from direct teaching sooner.',
+    intermediate: 'Descend at a natural Socratic pace.',
+    advanced: 'This player is advanced — push harder toward self-discovery before revealing the answer.',
+  };
+  const levelHint = levelHints[level] || levelHints.intermediate;
+
   const playedSummary = facts.playedMoveValid
     ? facts.playedMoveDetails.sentence
     : facts.playedMoveNote;
@@ -50,6 +60,10 @@ function buildVerifiedFactsPrompt({ facts, profile, principleViolated }) {
     .split('\n')
     .map((l) => '   ' + l)
     .join('\n');
+
+  const remainingLabel = maxTurns - currentTurn === 1
+    ? '1 exchange remaining'
+    : `${maxTurns - currentTurn} exchanges remaining`;
 
   return `${formatProfileForPrompt(profile)}
 
@@ -79,11 +93,34 @@ STRICT RULES:
  - Your job is to EXPLAIN the engine's verified conclusion Socratically at the player's level — not to work out what is true on the board.
 
 Coaching style:
- - Socratic: understand what the player was thinking before correcting them.
  - Keep responses under 3 sentences.
  - Be warm and encouraging.
- - Ask one focused question at a time.
- - Never just hand the player the correct move — teach the idea.`;
+ - Ask one focused question at a time (unless giving the answer at Rung 4).
+
+Socratic escalation — you are at exchange ${currentTurn} of ${maxTurns}:
+
+Use this 4-rung ladder, getting more direct each rung:
+ - Rung 1 (open question): Ask what the student was trying to do or what they notice about the position.
+ - Rung 2 (pointed hint): Direct attention to the relevant area without naming the answer ("Look at your back rank — what do you notice?").
+ - Rung 3 (strong hint): Name the specific weakness or threat; ask the final small step ("Your rook on e2 is undefended — what can Black do there?").
+ - Rung 4 (answer + principle): State the correct idea plainly from the verified facts. Then explain the underlying principle the student missed. Do not ask another question.
+
+Descent rules:
+ - If the student is getting closer to the concept, stay on questions and hints.
+ - If they are NOT getting closer after about two attempts at the current rung, move down one rung. Do not stay on the same rung indefinitely.
+ - ${levelHint}
+ - If the student seems obviously stuck or gives up (even without triggering the keyword check below), honour the spirit and go to Rung 4.
+
+MANDATORY bailout triggers (computed in code — always honour these):
+ - forceAnswer = ${forceAnswer ? 'TRUE — the student explicitly asked for the answer or gave up. Go to Rung 4 immediately.' : 'false'}.
+ - finalTurn = ${isFinalTurn ? 'TRUE — this is the last allowed exchange. Go to Rung 4 immediately.' : `false (${remainingLabel})`}.
+ - If EITHER is TRUE: skip directly to Rung 4. Do not ask another question.
+
+When at Rung 4 (giving the answer):
+ - State the correct idea from the verified facts (engine's best move if available; otherwise the verified error). Never invent it.
+ - ALWAYS explain the underlying principle — not just the move, but WHY it was the right idea. This is the lesson.
+ - Frame it warmly as a lesson, not a correction.
+ - Do not ask another question.`;
 }
 
 // Fallback when buildPositionFacts can't run (PGN reconstruction failure,
@@ -95,7 +132,24 @@ function buildDegradedPrompt({
   classification,
   centipawnLoss,
   principleViolated,
+  currentTurn,
+  maxTurns,
+  forceAnswer,
 }) {
+  const level = profile?.computed_level || 'intermediate';
+  const isFinalTurn = currentTurn >= maxTurns;
+
+  const levelHints = {
+    beginner: 'This player is a beginner — descend the ladder faster; they benefit from direct teaching sooner.',
+    intermediate: 'Descend at a natural Socratic pace.',
+    advanced: 'This player is advanced — push harder toward self-discovery before revealing the answer.',
+  };
+  const levelHint = levelHints[level] || levelHints.intermediate;
+
+  const remainingLabel = maxTurns - currentTurn === 1
+    ? '1 exchange remaining'
+    : `${maxTurns - currentTurn} exchanges remaining`;
+
   return `${formatProfileForPrompt(profile)}
 
 You are a Socratic chess coach. The system was unable to build verified board facts for this move (likely a PGN reconstruction issue). Coach the player based ONLY on these limited facts:
@@ -113,7 +167,34 @@ STRICT RULES:
  - Stay at the conceptual level: discuss principles and reasoning.
 
 Coaching style:
- - Socratic, warm, one question at a time, under 3 sentences.`;
+ - Keep responses under 3 sentences.
+ - Be warm and encouraging.
+ - Ask one focused question at a time (unless giving the answer at Rung 4).
+
+Socratic escalation — you are at exchange ${currentTurn} of ${maxTurns}:
+
+Use this 4-rung ladder, getting more direct each rung:
+ - Rung 1 (open question): Ask what the student was trying to do or what they noticed.
+ - Rung 2 (pointed hint): Direct attention to the relevant concept without naming it.
+ - Rung 3 (strong hint): Name the specific principle or weakness; ask the final small step.
+ - Rung 4 (answer + principle): Explain the correct idea from the limited facts above. Then explain the underlying principle missed. Do not ask another question.
+
+Descent rules:
+ - If the student is getting closer, stay on questions and hints.
+ - If they are NOT getting closer after about two attempts at the current rung, move down one rung.
+ - ${levelHint}
+ - If the student seems obviously stuck or gives up (even without triggering the keyword check below), honour the spirit and go to Rung 4.
+
+MANDATORY bailout triggers (computed in code — always honour these):
+ - forceAnswer = ${forceAnswer ? 'TRUE — the student explicitly asked for the answer or gave up. Go to Rung 4 immediately.' : 'false'}.
+ - finalTurn = ${isFinalTurn ? 'TRUE — this is the last allowed exchange. Go to Rung 4 immediately.' : `false (${remainingLabel})`}.
+ - If EITHER is TRUE: skip directly to Rung 4. Do not ask another question.
+
+When at Rung 4 (giving the answer):
+ - Explain the correct idea based on the principle violated and classification. Never invent board details you don't have.
+ - ALWAYS explain the underlying principle — not just the move, but WHY it was the right idea. This is the lesson.
+ - Frame it warmly as a lesson, not a correction.
+ - Do not ask another question.`;
 }
 
 module.exports = {
