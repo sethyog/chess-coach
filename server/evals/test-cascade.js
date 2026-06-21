@@ -5,11 +5,11 @@
 // cache hits, and dial gate behavior.
 //
 // Usage:
-//   ENGINE_CONSULTATION_LEVEL=MED node server/test-cascade.js
+//   ENGINE_CONSULTATION_LEVEL=MED node server/evals/test-cascade.js
 //
 // Requires a running Postgres (DATABASE_URL) and stockfish in PATH.
-// Uses a synthetic move_id of 999999 — clears any existing coaching_facts row
-// for that id before running, then cleans up after.
+// Borrows a real move_id from the moves table to satisfy the FK constraint.
+// Saves and restores the coaching_facts row for that move so real data is untouched.
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 
@@ -23,7 +23,9 @@ const STARTUP_DELAY_MS = 1500;
 
 // ── Synthetic facts object (mirrors what coach.js builds from coaching_facts) ─
 // FEN is from the Qxf5 blunder position (White just played Qxf5?? leaving queen hanging).
-const FAKE_MOVE_ID = 999999;
+// TEST_MOVE_ID is resolved at runtime from a real moves row (FK constraint).
+let TEST_MOVE_ID = null;
+let originalEngineCallsUsed = null; // saved before tests, restored after
 
 const FACTS = {
   fenBefore:     'r1b1k2r/pppp1ppp/2n1pq2/8/1bB1P3/2N2N2/PPP2PPP/R1BQK2R w KQkq - 0 7',
@@ -63,12 +65,21 @@ async function seedFacts(engineCallsUsed = 0) {
     `INSERT INTO coaching_facts (move_id, facts, engine_calls_used)
      VALUES ($1, $2, $3)
      ON CONFLICT (move_id) DO UPDATE SET facts = $2, engine_calls_used = $3`,
-    [FAKE_MOVE_ID, JSON.stringify(FACTS), engineCallsUsed]
+    [TEST_MOVE_ID, JSON.stringify(FACTS), engineCallsUsed]
   );
 }
 
 async function cleanup() {
-  await query('DELETE FROM coaching_facts WHERE move_id = $1', [FAKE_MOVE_ID]);
+  if (originalEngineCallsUsed === null) {
+    // No pre-existing row — remove the one we created.
+    await query('DELETE FROM coaching_facts WHERE move_id = $1', [TEST_MOVE_ID]);
+  } else {
+    // Restore original engine_calls_used.
+    await query(
+      'UPDATE coaching_facts SET engine_calls_used = $1 WHERE move_id = $2',
+      [originalEngineCallsUsed, TEST_MOVE_ID]
+    );
+  }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -76,7 +87,7 @@ async function cleanup() {
 async function testIllegalMove() {
   console.log('\n── Tier 2: illegal move ─────────────────────────────────────');
   await seedFacts(0);
-  const r = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Qh9'], 'DIRECT_CHALLENGE');
+  const r = await resolveCascade(TEST_MOVE_ID, FACTS, ['Qh9'], 'DIRECT_CHALLENGE');
   check('ok=true',    r.ok  === true);
   check('legal=false', r.legal === false);
   check('tier=2',     r.tier === 2);
@@ -86,7 +97,7 @@ async function testLegalTier2NoEngine() {
   console.log('\n── Tier 2: legal move, dial=OFF (no engine) ─────────────────');
   await seedFacts(0);
   // resolveCascade checks ENGINE_CONSULTATION_LEVEL at runtime; if OFF, gate blocks.
-  const r = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
+  const r = await resolveCascade(TEST_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
   check('ok=true',          r.ok === true);
   check('legal=true',       r.legal === true);
   check('tier=2',           r.tier === 2);
@@ -100,11 +111,11 @@ async function testCacheHit() {
   console.log('\n── Cache: repeated FEN returns instantly ─────────────────────');
   await seedFacts(0);
   // First call (may hit engine if level allows).
-  const r1 = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
+  const r1 = await resolveCascade(TEST_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
   await seedFacts(0); // reset budget counter
 
   const t0 = Date.now();
-  const r2  = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
+  const r2  = await resolveCascade(TEST_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
   const ms  = Date.now() - t0;
 
   check('second call ok',       r2.ok === true);
@@ -126,7 +137,7 @@ async function testBudgetExhaustion() {
   }
   // Seed with budget already at cap.
   await seedFacts(cap);
-  const r = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
+  const r = await resolveCascade(TEST_MOVE_ID, FACTS, ['Nxf6'], 'DIRECT_CHALLENGE');
   check('ok=true',            r.ok   === true);
   check('legal=true',         r.legal === true);
   check('tier=2 (no engine)', r.tier  === 2);
@@ -136,7 +147,7 @@ async function testBudgetExhaustion() {
 async function testDialGate() {
   console.log('\n── Dial gate: USER_PROPOSAL blocked at LOW ───────────────────');
   await seedFacts(0);
-  const r = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Nb5'], 'USER_PROPOSAL');
+  const r = await resolveCascade(TEST_MOVE_ID, FACTS, ['Nb5'], 'USER_PROPOSAL');
   check('ok=true',  r.ok === true);
   check('legal=true', r.legal === true);
   if (ENGINE_CONSULTATION_LEVEL === 'LOW') {
@@ -159,7 +170,7 @@ async function testTier3EngineEval() {
     return;
   }
   await seedFacts(0);
-  const r = await resolveCascade(FAKE_MOVE_ID, FACTS, ['Qxf5'], 'DIRECT_CHALLENGE');
+  const r = await resolveCascade(TEST_MOVE_ID, FACTS, ['Qxf5'], 'DIRECT_CHALLENGE');
   check('ok=true',         r.ok    === true);
   check('legal=true',      r.legal === true);
   check('tier=3',          r.tier  === 3,  `got tier=${r.tier}${r.note ? ' note=' + r.note : ''}`);
@@ -179,6 +190,20 @@ async function run() {
   console.log(`ENGINE_CONSULTATION_LEVEL=${ENGINE_CONSULTATION_LEVEL}  cap=${MAX_ENGINE_CALLS_PER_CONVO[ENGINE_CONSULTATION_LEVEL] ?? 0}`);
 
   await new Promise(r => setTimeout(r, STARTUP_DELAY_MS));
+
+  // Borrow a real move_id to satisfy the FK constraint on coaching_facts.
+  const moveRow = await query('SELECT id FROM moves ORDER BY id DESC LIMIT 1');
+  if (!moveRow.rows[0]) {
+    console.error('[FATAL] No rows in moves table — run the app and import a game first.');
+    process.exit(1);
+  }
+  TEST_MOVE_ID = moveRow.rows[0].id;
+
+  // Save existing coaching_facts row if present so we can restore it after tests.
+  const existing = await query('SELECT engine_calls_used FROM coaching_facts WHERE move_id = $1', [TEST_MOVE_ID]);
+  originalEngineCallsUsed = existing.rows[0]?.engine_calls_used ?? null;
+
+  console.log(`Using move_id=${TEST_MOVE_ID} (${originalEngineCallsUsed === null ? 'no existing facts row' : `existing engine_calls_used=${originalEngineCallsUsed}`})\n`);
 
   try {
     await testIllegalMove();
