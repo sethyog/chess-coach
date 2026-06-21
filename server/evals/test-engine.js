@@ -10,7 +10,7 @@
 // Usage (Railway one-off):
 //   railway run node server/test-engine.js
 
-const { evaluateFen, isEngineAvailable, getEvalCacheSize, ENGINE_DEPTH, ENGINE_MOVETIME_MS } = require('./engine');
+const { evaluateFen, isEngineAvailable, getEvalCacheSize, ENGINE_DEPTH, ENGINE_MOVETIME_MS } = require('../engine');
 
 // Give Stockfish time to finish UCI handshake before we fire queries.
 const STARTUP_DELAY_MS = 1500;
