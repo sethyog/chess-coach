@@ -6,7 +6,7 @@
 // Safe to delete once the test passes — nothing else imports this file.
 
 const Database = require('better-sqlite3');
-const { reconstructBeforeFen, buildPositionFacts } = require('./position-facts');
+const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
 
 // Inline the prompt builder so the test prints the exact thing the coach
 // route will send. If you sign off on this format, the same function gets
