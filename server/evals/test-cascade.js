@@ -11,13 +11,13 @@
 // Uses a synthetic move_id of 999999 — clears any existing coaching_facts row
 // for that id before running, then cleans up after.
 
-require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 
-const { query }                  = require('./db');
+const { query }                  = require('../db');
 const { resolveCascade,
         ENGINE_CONSULTATION_LEVEL,
-        MAX_ENGINE_CALLS_PER_CONVO } = require('./engine-cascade');
-const { isEngineAvailable }      = require('./engine');
+        MAX_ENGINE_CALLS_PER_CONVO } = require('../engine-cascade');
+const { isEngineAvailable }      = require('../engine');
 
 const STARTUP_DELAY_MS = 1500;
 
