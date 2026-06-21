@@ -115,7 +115,12 @@ async function resolveCascade(moveId, facts, moves, situation) {
   const moveHistory = [];
 
   for (const san of moves) {
-    const result = chess.move(san);
+    let result;
+    try {
+      result = chess.move(san);
+    } catch {
+      result = null;
+    }
     if (!result) {
       return {
         ok:     true,
