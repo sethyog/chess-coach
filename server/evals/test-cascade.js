@@ -60,10 +60,10 @@ function check(label, condition, detail = '') {
 
 async function seedFacts(engineCallsUsed = 0) {
   await query(
-    `INSERT INTO coaching_facts (move_id, engine_calls_used)
-     VALUES ($1, $2)
-     ON CONFLICT (move_id) DO UPDATE SET engine_calls_used = $2`,
-    [FAKE_MOVE_ID, engineCallsUsed]
+    `INSERT INTO coaching_facts (move_id, facts, engine_calls_used)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (move_id) DO UPDATE SET facts = $2, engine_calls_used = $3`,
+    [FAKE_MOVE_ID, JSON.stringify(FACTS), engineCallsUsed]
   );
 }
 
