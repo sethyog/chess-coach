@@ -6,6 +6,41 @@ const { query } = require('../db');
 const { logCandidate } = require('../principle-candidates');
 const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
 const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
+const { resolveCascade, ENGINE_CONSULTATION_LEVEL } = require('../engine-cascade');
+
+// ── Tool definition (sent to Claude on every coaching request with verified facts) ──
+const EVALUATE_MOVE_TOOL = {
+  name: 'evaluate_alternative_move',
+  description:
+    'Evaluate a sequence of up to 2 SAN moves from the reviewed position using the chess engine. ' +
+    'Use ONLY for tactical claims or student proposals that cannot be answered from the verified facts block. ' +
+    'The tool runs a deterministic cascade: legality (chess.js) then optional engine eval (gated by level + budget).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      moves: {
+        type: 'array',
+        items: { type: 'string' },
+        maxItems: 2,
+        description:
+          'SAN moves to apply from the reviewed before-position, in order ' +
+          '(e.g. ["Qd8"] for one ply, or ["Qd8", "Rxd8"] for two plies).',
+      },
+      situation: {
+        type: 'string',
+        enum: ['DIRECT_CHALLENGE', 'USER_PROPOSAL', 'LINE_EXPLORATION'],
+        description:
+          'DIRECT_CHALLENGE if the student challenges a tactical claim you made; ' +
+          'USER_PROPOSAL if they propose an alternative line; ' +
+          'LINE_EXPLORATION for a multi-step line.',
+      },
+    },
+    required: ['moves', 'situation'],
+  },
+};
+
+// Max iterations of the tool-use loop per request (prevents runaway chains).
+const MAX_TOOL_ITERATIONS = 4;
 
 // ── Socratic escalation constants ────────────────────────────────────────────
 const MAX_TURNS_BY_LEVEL = { beginner: 3, intermediate: 4, advanced: 5 };
@@ -175,7 +210,15 @@ router.post('/conversation/:moveId', async (req, res) => {
   }
 
   const systemPrompt = facts
-    ? buildVerifiedFactsPrompt({ facts, profile, principleViolated: moveRow?.principle_violated, currentTurn, maxTurns, forceAnswer })
+    ? buildVerifiedFactsPrompt({
+        facts,
+        profile,
+        principleViolated: moveRow?.principle_violated,
+        currentTurn,
+        maxTurns,
+        forceAnswer,
+        engineLevel: ENGINE_CONSULTATION_LEVEL,
+      })
     : buildDegradedPrompt({
         profile,
         moveSan: moveRow?.move,
@@ -187,24 +230,77 @@ router.post('/conversation/:moveId', async (req, res) => {
         forceAnswer,
       });
 
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-opus-4-7',
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: history.map(h => ({ role: h.role, content: h.content })),
-      }),
-    });
+  // Only offer the engine tool when we have verified facts (need fenBefore for cascade).
+  const tools = facts ? [EVALUATE_MOVE_TOOL] : [];
 
-    const data = await response.json();
-    const reply = data.content?.[0]?.text || "I couldn't process that. Try again.";
+  try {
+    // Build the initial messages array from stored history.
+    // Tool-use turns are ephemeral (within this request only); only the final
+    // text reply is persisted to the conversations table.
+    const messages = history.map(h => ({ role: h.role, content: h.content }));
+
+    let reply = null;
+    let toolCallCount = 0;
+
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-7',
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages,
+          ...(tools.length > 0 ? { tools } : {}),
+        }),
+      });
+
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => '<no body>');
+        throw new Error(`Anthropic ${response.status}: ${errBody}`);
+      }
+
+      const data = await response.json();
+
+      if (data.stop_reason === 'tool_use') {
+        const toolBlock = data.content?.find(b => b.type === 'tool_use');
+        if (!toolBlock) {
+          // Malformed response; extract any text and stop.
+          reply = data.content?.find(b => b.type === 'text')?.text || "I couldn't process that. Try again.";
+          break;
+        }
+
+        toolCallCount++;
+        const { moves, situation } = toolBlock.input || {};
+        console.log(`[coach] tool call ${toolCallCount}: evaluate_alternative_move moves=${JSON.stringify(moves)} situation=${situation} moveId=${moveId}`);
+
+        const cascadeResult = await resolveCascade(moveId, facts, moves || [], situation || 'USER_PROPOSAL');
+        console.log(`[coach] cascade result: tier=${cascadeResult.tier} evalCp=${cascadeResult.evalCp} note=${cascadeResult.note || ''}`);
+
+        // Add assistant's tool_use turn + our tool_result to the in-flight messages.
+        messages.push({ role: 'assistant', content: data.content });
+        messages.push({
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: toolBlock.id,
+            content: JSON.stringify(cascadeResult),
+          }],
+        });
+        continue;
+      }
+
+      // stop_reason is 'end_turn' (or anything else) — extract final text.
+      const textBlock = data.content?.find(b => b.type === 'text');
+      reply = textBlock?.text || data.content?.[0]?.text || "I couldn't process that. Try again.";
+      break;
+    }
+
+    if (!reply) reply = "I couldn't generate a response. Please try again.";
 
     await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'assistant', reply]);
 

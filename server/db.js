@@ -337,9 +337,15 @@ async function initDb() {
         move_id INTEGER PRIMARY KEY,
         facts TEXT NOT NULL,
         computed_at TIMESTAMPTZ DEFAULT NOW(),
+        engine_calls_used INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (move_id) REFERENCES moves(id)
       )
     `);
+
+    if (!await columnExists(client, 'coaching_facts', 'engine_calls_used')) {
+      await client.query('ALTER TABLE coaching_facts ADD COLUMN engine_calls_used INTEGER NOT NULL DEFAULT 0');
+      console.log('Migration: added coaching_facts.engine_calls_used');
+    }
 
     console.log('Database initialized');
   } finally {

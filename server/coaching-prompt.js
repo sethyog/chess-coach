@@ -4,6 +4,31 @@
 
 const MAX_LEGAL_MOVES_LISTED = 40;
 
+// Appended to the system prompt when the evaluate_alternative_move tool is active.
+function buildToolSection(engineLevel) {
+  return `
+Engine tool: evaluate_alternative_move
+You have access to a chess engine evaluation tool. Use it ONLY for positions not already covered in the VERIFIED FACTS block.
+
+When to use it:
+ - DIRECT_CHALLENGE: the student directly challenges a tactical claim with a concrete alternative ("but doesn't Qxd8 just win a piece?"). Pass situation="DIRECT_CHALLENGE".
+ - USER_PROPOSAL: the student proposes a specific alternative line and you need engine data to address it honestly ("what if I'd played Nb5?"). Pass situation="USER_PROPOSAL". Only at level MED or higher.
+ - Current engine consultation level: ${engineLevel}. At LOW only DIRECT_CHALLENGE is permitted; at MED both; at HIGH all.
+
+When NOT to use it:
+ - Questions answered by the VERIFIED FACTS above (best move, eval of the played move, etc.) — those are Tier 1 and cost nothing.
+ - Conceptual/teaching questions ("why is a centralised knight strong?") — answer from your chess knowledge.
+ - You've already used the engine this conversation and the budget is gone — the tool will say so.
+
+How to use it correctly:
+ - Provide moves as SAN strings from the reviewed before-position (e.g. ["Qd8", "Rxd8"] for the user's move + a plausible reply).
+ - Maximum 2 moves (≤ 2 plies).
+ - When the tool returns an evalCp, use it as ground truth to explain the position. A positive evalCp favours White.
+ - When the tool returns a "note" instead of evalCp, tell the student you can't calculate that line right now and stay conceptual.
+ - If the tool says legal=false, tell the student that move is not legal in this position.
+ - Never assert move quality, eval, or tactical outcomes from your own chess knowledge. Always use verified facts or the tool.`;
+}
+
 function formatProfileForPrompt(profile) {
   const level = profile?.computed_level || 'intermediate';
   const avgCpl =
@@ -41,7 +66,8 @@ function fmtEvalCp(cp) {
 
 // Builds the full Socratic-coach system prompt with the verified-facts
 // block as the sole source of board truth.
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer }) {
+// engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW' }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -120,7 +146,8 @@ When at Rung 4 (giving the answer):
  - State the correct idea from the verified facts (engine's best move if available; otherwise the verified error). Never invent it.
  - ALWAYS explain the underlying principle — not just the move, but WHY it was the right idea. This is the lesson.
  - Frame it warmly as a lesson, not a correction.
- - Do not ask another question.`;
+ - Do not ask another question.
+${buildToolSection(engineLevel)}`;
 }
 
 // Fallback when buildPositionFacts can't run (PGN reconstruction failure,
@@ -201,4 +228,5 @@ module.exports = {
   formatProfileForPrompt,
   buildVerifiedFactsPrompt,
   buildDegradedPrompt,
+  buildToolSection,
 };
