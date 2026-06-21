@@ -241,6 +241,8 @@ router.post('/conversation/:moveId', async (req, res) => {
 
     let reply = null;
     let toolCallCount = 0;
+    let resolvedAtTier = facts ? 1 : 'none';
+    let engineCalled   = false;
 
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -281,6 +283,9 @@ router.post('/conversation/:moveId', async (req, res) => {
         const cascadeResult = await resolveCascade(moveId, facts, moves || [], situation || 'USER_PROPOSAL');
         console.log(`[coach] cascade result: tier=${cascadeResult.tier} evalCp=${cascadeResult.evalCp} note=${cascadeResult.note || ''}`);
 
+        if (cascadeResult.tier === 3) { resolvedAtTier = 3; engineCalled = true; }
+        else if (cascadeResult.tier === 2 && resolvedAtTier !== 3) { resolvedAtTier = 2; }
+
         // Add assistant's tool_use turn + our tool_result to the in-flight messages.
         messages.push({ role: 'assistant', content: data.content });
         messages.push({
@@ -301,6 +306,16 @@ router.post('/conversation/:moveId', async (req, res) => {
     }
 
     if (!reply) reply = "I couldn't generate a response. Please try again.";
+
+    try {
+      console.log('[TIER] ' + JSON.stringify({
+        conversationId: moveId,
+        moveId,
+        turnNumber:     currentTurn,
+        resolvedAtTier,
+        engineCalled,
+      }));
+    } catch (_) {}
 
     await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'assistant', reply]);
 
