@@ -259,6 +259,24 @@ function PatternResults({ results, onReanalyse, expanded, onToggle }) {
         </div>
       </section>
 
+      {/* Change 6: section label between summary and cards so the repeated
+          principle name reads as "overview → detail" not "duplicate" */}
+      <div
+        style={{
+          margin: '24px 0 10px',
+          fontSize: 11,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          color: 'var(--text-dim)',
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: 8,
+        }}
+      >
+        {patterns?.length === 0
+          ? 'Patterns'
+          : `${patterns.length} recurring pattern${patterns.length === 1 ? '' : 's'}`}
+      </div>
+
       {patterns?.length === 0 ? (
         <section className="panel">
           <div className="empty">

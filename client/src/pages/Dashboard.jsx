@@ -17,9 +17,7 @@ function formatDate(iso) {
 
 function resultClass(result) {
   const r = (result || '').toLowerCase();
-  if (r === 'win' || r === '1-0' || r === '0-1' /* handled in label */) {
-    return 'win';
-  }
+  if (r === 'win' || r === '1-0' || r === '0-1') return 'win';
   if (r === 'loss' || r === 'lose') return 'loss';
   if (r === 'draw' || r === '1/2-1/2' || r === '½-½') return 'draw';
   return '';
@@ -44,26 +42,36 @@ function ImportNudge() {
   );
 }
 
-function PatternCard({ latest, gameCount, loading, showImportNudge }) {
+function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
+  const wrapStyle = {
+    opacity: dimmed ? 0.45 : 1,
+    transition: 'opacity 0.3s',
+    pointerEvents: dimmed ? 'none' : undefined,
+  };
+
   if (loading) {
     return (
-      <section className="panel">
-        <h2>Pattern analysis</h2>
-        <div className="empty">Loading…</div>
-      </section>
+      <div style={wrapStyle}>
+        <section className="panel">
+          <h2>Pattern analysis</h2>
+          <div className="empty">Loading…</div>
+        </section>
+      </div>
     );
   }
 
   if (gameCount < 3) {
     const remaining = 3 - gameCount;
     return (
-      <section className="panel">
-        <h2>Pattern analysis</h2>
-        <div className="empty">
-          Upload {remaining} more game{remaining === 1 ? '' : 's'} to unlock
-          pattern analysis
-        </div>
-      </section>
+      <div style={wrapStyle}>
+        <section className="panel">
+          <h2>Pattern analysis</h2>
+          <div className="empty">
+            Upload {remaining} more game{remaining === 1 ? '' : 's'} to unlock
+            pattern analysis
+          </div>
+        </section>
+      </div>
     );
   }
 
@@ -156,8 +164,6 @@ export default function Dashboard() {
   const [profileLoading, setProfileLoading] = useState(true);
 
   // Import section: collapsed by default; auto-expands if user has no games.
-  // Initialized to false (collapsed) so users with games never see a flash.
-  // The ref ensures auto-init only fires once (not on subsequent loadGames calls).
   const [importExpanded, setImportExpanded] = useState(false);
   const importInitialized = useRef(false);
 
@@ -177,8 +183,6 @@ export default function Dashboard() {
         const { data } = await api.get('/games');
         if (!cancelled) {
           setGames(data);
-          // Auto-expand import section only on first load and only when there
-          // are no games yet (import is the primary action for new users).
           if (!importInitialized.current) {
             importInitialized.current = true;
             if (data.length === 0) setImportExpanded(true);
@@ -190,9 +194,7 @@ export default function Dashboard() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -202,16 +204,12 @@ export default function Dashboard() {
         const { data } = await api.get('/coach/patterns/latest');
         if (!cancelled) setLatest(data);
       } catch {
-        // Best-effort: card falls back to the "ready" or "upload" state
-        // based on game count if the fetch fails.
         if (!cancelled) setLatest(null);
       } finally {
         if (!cancelled) setLatestLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -226,45 +224,20 @@ export default function Dashboard() {
         if (!cancelled) setProfileLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  // After Chess.com import: refresh games list, profile (last_import_at)
-  // and latest pattern analysis (so the staleness nudge updates).
   async function handleImported() {
-    try {
-      const { data: g } = await api.get('/games');
-      setGames(g);
-    } catch {
-      /* best-effort */
-    }
-    try {
-      const { data: p } = await api.get('/profile');
-      setProfile(p);
-    } catch {
-      /* best-effort */
-    }
-    try {
-      const { data: l } = await api.get('/coach/patterns/latest');
-      setLatest(l);
-    } catch {
-      /* best-effort */
-    }
+    try { const { data: g } = await api.get('/games'); setGames(g); } catch { /* best-effort */ }
+    try { const { data: p } = await api.get('/profile'); setProfile(p); } catch { /* best-effort */ }
+    try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
   }
 
   async function handleSave(e) {
     e.preventDefault();
     setError('');
-
     const trimmed = pgn.trim();
-    if (!trimmed) {
-      setError('Paste a PGN first.');
-      return;
-    }
-
-    // Validate the PGN parses before sending to the server.
+    if (!trimmed) { setError('Paste a PGN first.'); return; }
     try {
       const chess = new Chess();
       chess.loadPgn(trimmed);
@@ -272,7 +245,6 @@ export default function Dashboard() {
       setError('PGN is not valid: ' + err.message);
       return;
     }
-
     setSaving(true);
     try {
       await api.post('/games', {
@@ -293,16 +265,31 @@ export default function Dashboard() {
     }
   }
 
-  // Show the post-import nudge when there's a cached analysis older than the
-  // most recent Chess.com import. Re-running clears it.
   const showImportNudge =
     !!profile?.last_import_at &&
     !!latest?.analysedAt &&
-    new Date(profile.last_import_at).getTime() >
-      new Date(latest.analysedAt).getTime();
+    new Date(profile.last_import_at).getTime() > new Date(latest.analysedAt).getTime();
+
+  // New-user state: fewer than 3 games and done loading.
+  const isNewUser = !loading && games.length < 3;
 
   return (
     <>
+      {/* Change 1: orientation line for new/light users only */}
+      {isNewUser && (
+        <p
+          style={{
+            margin: '0 0 18px',
+            fontSize: 13,
+            color: 'var(--text-dim)',
+            lineHeight: 1.6,
+          }}
+        >
+          Import your games and I'll surface the recurring mistakes holding
+          you back — then coach you through them, one move at a time.
+        </p>
+      )}
+
       {/* ── Collapsible import section ───────────────────────────────── */}
       <div
         className="panel"
@@ -398,6 +385,17 @@ export default function Dashboard() {
                 onChange={(e) => setPgn(e.target.value)}
                 disabled={saving}
               />
+              {/* Change 5: PGN hint for less-technical users */}
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: 12,
+                  color: 'var(--text-dim)',
+                  lineHeight: 1.5,
+                }}
+              >
+                Paste the game text from Chess.com or Lichess (look under Share → PGN).
+              </p>
               {error && <div className="error">{error}</div>}
               <div className="row" style={{ justifyContent: 'flex-end' }}>
                 <button type="submit" className="primary" disabled={saving}>
@@ -410,40 +408,51 @@ export default function Dashboard() {
       )}
       {/* ── End collapsible import section ──────────────────────────── */}
 
+      {/* Change 2: de-emphasize locked pattern card for new users */}
       <PatternCard
         latest={latest}
         gameCount={games.length}
         loading={loading || latestLoading}
         showImportNudge={showImportNudge}
+        dimmed={isNewUser}
       />
 
-      <section className="panel">
-        <h2>Your games</h2>
-        {loading ? (
-          <div className="empty">Loading…</div>
-        ) : games.length === 0 ? (
-          <div className="empty">No games yet. Paste a PGN above to begin.</div>
-        ) : (
-          <div className="games-list">
-            {games.map((g) => (
-              <div
-                key={g.id}
-                className="game-row"
-                onClick={() => navigate(`/game/${g.id}`)}
-              >
-                <div>
-                  <div className="opponent">vs {g.opponent || 'Unknown'}</div>
-                  <div className="date">{formatDate(g.played_at)}</div>
+      {/* Change 2: de-emphasize empty games list for new users */}
+      <div
+        style={{
+          opacity: isNewUser ? 0.45 : 1,
+          transition: 'opacity 0.3s',
+          pointerEvents: isNewUser ? 'none' : undefined,
+        }}
+      >
+        <section className="panel">
+          <h2>Your games</h2>
+          {loading ? (
+            <div className="empty">Loading…</div>
+          ) : games.length === 0 ? (
+            <div className="empty">No games yet. Paste a PGN above to begin.</div>
+          ) : (
+            <div className="games-list">
+              {games.map((g) => (
+                <div
+                  key={g.id}
+                  className="game-row"
+                  onClick={() => navigate(`/game/${g.id}`)}
+                >
+                  <div>
+                    <div className="opponent">vs {g.opponent || 'Unknown'}</div>
+                    <div className="date">{formatDate(g.played_at)}</div>
+                  </div>
+                  <span className={`result ${resultClass(g.result)}`}>
+                    {g.result || '—'}
+                  </span>
+                  <span className="muted">→</span>
                 </div>
-                <span className={`result ${resultClass(g.result)}`}>
-                  {g.result || '—'}
-                </span>
-                <span className="muted">→</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </>
   );
 }

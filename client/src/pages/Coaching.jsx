@@ -14,6 +14,16 @@ export default function Coaching() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
+  // Change 4: first-coaching-session hint, dismissed via localStorage.
+  const [hintDismissed, setHintDismissed] = useState(
+    () => localStorage.getItem('seenCoachingHint') === 'true'
+  );
+
+  function dismissHint() {
+    localStorage.setItem('seenCoachingHint', 'true');
+    setHintDismissed(true);
+  }
+
   const logRef = useRef(null);
 
   useEffect(() => {
@@ -34,8 +44,6 @@ export default function Coaching() {
         if (!move) {
           setError('Move not found for this game.');
         } else {
-          // Derive from/to squares via the PGN verbose history so the board
-          // can draw an arrow showing where the piece came from.
           let fromSquare = null;
           let toSquare = null;
           if (gameRes.data.pgn) {
@@ -44,7 +52,6 @@ export default function Coaching() {
               chess.loadPgn(gameRes.data.pgn);
               const history = chess.history({ verbose: true });
 
-              // Primary: match by move_number + SAN (fast, exact).
               const moveNumber = move.move_number;
               const histEntry = history.find(
                 (h, i) =>
@@ -56,8 +63,6 @@ export default function Coaching() {
                 fromSquare = histEntry.from;
                 toSquare = histEntry.to;
               } else {
-                // Fallback: replay and match by the resulting FEN.
-                // Handles edge cases where SAN / move_number differ slightly.
                 const replay = new Chess();
                 for (const h of history) {
                   replay.move(h.san);
@@ -98,12 +103,9 @@ export default function Coaching() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [id, moveId]);
 
-  // Auto-scroll chat to bottom on new messages.
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -130,8 +132,6 @@ export default function Coaching() {
         moveContext,
       });
 
-      // Server should return either the full updated transcript or the new
-      // assistant reply. Handle both shapes.
       if (Array.isArray(data)) {
         setMessages(data);
       } else if (data && data.messages && Array.isArray(data.messages)) {
@@ -151,13 +151,11 @@ export default function Coaching() {
           { id: `srv-${Date.now()}`, role: 'assistant', content: data.reply },
         ]);
       } else {
-        // Fall back: refetch conversation so we stay in sync.
         const conv = await api.get(`/coach/conversation/${moveId}`);
         setMessages(conv.data || []);
       }
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Send failed');
-      // Roll back optimistic user message so the user can retry.
       setMessages(messages);
       setDraft(text);
     } finally {
@@ -222,14 +220,13 @@ export default function Coaching() {
                       {moveContext.classification}
                     </span>
                   </dd>
-                  <dt>Principle</dt>
-                  <dd>
-                    {moveContext.principle_violated || (
-                      <span className="muted">
-                        (To be discovered through the coaching dialogue.)
-                      </span>
-                    )}
-                  </dd>
+                  {/* Change 3: only show Principle row when a principle is known */}
+                  {moveContext.principle_violated && (
+                    <>
+                      <dt>Principle</dt>
+                      <dd>{moveContext.principle_violated}</dd>
+                    </>
+                  )}
                 </dl>
               </>
             ) : (
@@ -240,6 +237,48 @@ export default function Coaching() {
 
         <div>
           <div className="chat">
+            {/* Change 4: first-session Socratic hint, dismissible */}
+            {!hintDismissed && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  padding: '10px 14px',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'rgba(240, 192, 96, 0.04)',
+                  fontSize: 12,
+                  color: 'var(--text-dim)',
+                  lineHeight: 1.55,
+                  flexShrink: 0,
+                }}
+              >
+                <span>
+                  This coach asks before it tells — share what you were
+                  thinking and it'll guide you from there.
+                </span>
+                <button
+                  onClick={dismissHint}
+                  aria-label="Dismiss hint"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-dim)',
+                    padding: '0 2px',
+                    fontSize: 16,
+                    lineHeight: 1,
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    minWidth: 20,
+                    opacity: 0.7,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             <div className="chat-log" ref={logRef}>
               {loading ? (
                 <div className="muted">Loading conversation…</div>
