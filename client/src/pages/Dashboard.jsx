@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { api } from '../api.js';
@@ -155,6 +155,12 @@ export default function Dashboard() {
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(true);
 
+  // Import section: collapsed by default; auto-expands if user has no games.
+  // Initialized to false (collapsed) so users with games never see a flash.
+  // The ref ensures auto-init only fires once (not on subsequent loadGames calls).
+  const [importExpanded, setImportExpanded] = useState(false);
+  const importInitialized = useRef(false);
+
   async function loadGames() {
     try {
       const { data } = await api.get('/games');
@@ -169,7 +175,15 @@ export default function Dashboard() {
     (async () => {
       try {
         const { data } = await api.get('/games');
-        if (!cancelled) setGames(data);
+        if (!cancelled) {
+          setGames(data);
+          // Auto-expand import section only on first load and only when there
+          // are no games yet (import is the primary action for new users).
+          if (!importInitialized.current) {
+            importInitialized.current = true;
+            if (data.length === 0) setImportExpanded(true);
+          }
+        }
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load games');
       } finally {
@@ -289,79 +303,112 @@ export default function Dashboard() {
 
   return (
     <>
-      {profileLoading ? (
-        <section className="panel">
-          <h2>Import from Chess.com</h2>
-          <div className="empty">Loading…</div>
-        </section>
-      ) : (
-        <ChessComImport
-          initialUsername={profile?.chesscom_username || ''}
-          lastImportAt={profile?.last_import_at}
-          onImported={handleImported}
-        />
-      )}
-
+      {/* ── Collapsible import section ───────────────────────────────── */}
       <div
+        className="panel"
+        onClick={() => setImportExpanded((e) => !e)}
+        role="button"
+        aria-expanded={importExpanded}
         style={{
-          textAlign: 'center',
-          fontSize: 11,
-          letterSpacing: '0.16em',
-          textTransform: 'uppercase',
-          color: 'var(--text-dim)',
-          margin: '6px 0',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          userSelect: 'none',
         }}
       >
-        or
+        <h2 style={{ margin: 0 }}>Import games</h2>
+        <span
+          style={{
+            fontSize: 20,
+            lineHeight: 1,
+            color: 'var(--gold)',
+            transition: 'transform 0.15s ease',
+            transform: importExpanded ? 'rotate(90deg)' : 'none',
+          }}
+        >
+          ▸
+        </span>
       </div>
 
-      <section className="panel">
-        <h2>New game</h2>
-        <p className="muted" style={{ marginTop: 0 }}>
-          Paste the PGN. The coach reviews it after Stockfish flags the moves.
-        </p>
-        <form className="form-stack" onSubmit={handleSave}>
-          <div className="row">
-            <input
-              type="text"
-              placeholder="Opponent name"
-              value={opponent}
-              onChange={(e) => setOpponent(e.target.value)}
-              disabled={saving}
+      {importExpanded && (
+        <>
+          {profileLoading ? (
+            <section className="panel">
+              <h2>Import from Chess.com</h2>
+              <div className="empty">Loading…</div>
+            </section>
+          ) : (
+            <ChessComImport
+              initialUsername={profile?.chesscom_username || ''}
+              lastImportAt={profile?.last_import_at}
+              onImported={handleImported}
             />
-            <select
-              value={result}
-              onChange={(e) => setResult(e.target.value)}
-              disabled={saving}
-            >
-              <option value="win">Win</option>
-              <option value="loss">Loss</option>
-              <option value="draw">Draw</option>
-            </select>
-            <select
-              value={userColor}
-              onChange={(e) => setUserColor(e.target.value)}
-              disabled={saving}
-            >
-              <option value="white">I played White</option>
-              <option value="black">I played Black</option>
-            </select>
+          )}
+
+          <div
+            style={{
+              textAlign: 'center',
+              fontSize: 11,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              color: 'var(--text-dim)',
+              margin: '6px 0',
+            }}
+          >
+            or
           </div>
-          <textarea
-            rows={8}
-            placeholder='[Event "Casual"]&#10;[White "You"]&#10;[Black "Opponent"]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ...'
-            value={pgn}
-            onChange={(e) => setPgn(e.target.value)}
-            disabled={saving}
-          />
-          {error && <div className="error">{error}</div>}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button type="submit" className="primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Save game'}
-            </button>
-          </div>
-        </form>
-      </section>
+
+          <section className="panel">
+            <h2>New game</h2>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Paste the PGN. The coach reviews it after Stockfish flags the moves.
+            </p>
+            <form className="form-stack" onSubmit={handleSave}>
+              <div className="row">
+                <input
+                  type="text"
+                  placeholder="Opponent name"
+                  value={opponent}
+                  onChange={(e) => setOpponent(e.target.value)}
+                  disabled={saving}
+                />
+                <select
+                  value={result}
+                  onChange={(e) => setResult(e.target.value)}
+                  disabled={saving}
+                >
+                  <option value="win">Win</option>
+                  <option value="loss">Loss</option>
+                  <option value="draw">Draw</option>
+                </select>
+                <select
+                  value={userColor}
+                  onChange={(e) => setUserColor(e.target.value)}
+                  disabled={saving}
+                >
+                  <option value="white">I played White</option>
+                  <option value="black">I played Black</option>
+                </select>
+              </div>
+              <textarea
+                rows={8}
+                placeholder='[Event "Casual"]&#10;[White "You"]&#10;[Black "Opponent"]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ...'
+                value={pgn}
+                onChange={(e) => setPgn(e.target.value)}
+                disabled={saving}
+              />
+              {error && <div className="error">{error}</div>}
+              <div className="row" style={{ justifyContent: 'flex-end' }}>
+                <button type="submit" className="primary" disabled={saving}>
+                  {saving ? 'Saving…' : 'Save game'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </>
+      )}
+      {/* ── End collapsible import section ──────────────────────────── */}
 
       <PatternCard
         latest={latest}
