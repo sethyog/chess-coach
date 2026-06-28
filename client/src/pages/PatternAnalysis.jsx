@@ -117,7 +117,7 @@ export default function PatternAnalysis() {
         { format },
         { timeout: PATTERN_ANALYSIS_TIMEOUT_MS },
       );
-      setReadyFormats(prev => prev.filter(f => f !== format));
+      setReadyFormats(prev => prev.filter(r => r.format !== format));
       setFormatCache(prev => ({
         ...prev,
         [format]: { state: 'ready', results: data, error: '' },
@@ -199,7 +199,8 @@ export default function PatternAnalysis() {
 function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysingFormat, expanded, onToggle }) {
   const label = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' }[format] || format;
   const minGames = MIN_GAMES[format] || 3;
-  const isReady = readyFormats.includes(format);
+  const readyEntry = readyFormats.find(r => r.format === format);
+  const isReady = !!readyEntry;
   const isAnalysing = analysingFormat === format;
 
   if (!cache || cache.state === 'loading') {
@@ -236,18 +237,25 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
 
   // State A: enough games, no completed batch yet — invite the user to run analysis.
   if (isReady) {
+    const { isFirstRun, totalGames } = readyEntry;
+    const threshold = { classical: 3, rapid: 5, bullet: 8 }[format] || 3;
+    const bodyText = isFirstRun
+      ? `You have ${totalGames} ${label} games ready. We'll analyse them in batches of ${threshold} to show your progression right away.`
+      : `You have ${threshold} new ${label} games ready for your next analysis.`;
+    const analysingText = isFirstRun
+      ? `Analysing ${totalGames} ${label.toLowerCase()} games in batches… (may take a few minutes)`
+      : `Analysing your last ${threshold} ${label.toLowerCase()} games… (1–3 min)`;
+
     return (
       <div className="panel">
         <h2>{label} analysis</h2>
         {isAnalysing ? (
           <div className="muted" style={{ fontStyle: 'italic', fontSize: 13 }}>
-            Analysing your {label.toLowerCase()} games… (1–3 min)
+            {analysingText}
           </div>
         ) : (
           <>
-            <div style={{ fontSize: 14 }}>
-              You have enough {label} games for a fresh analysis.
-            </div>
+            <div style={{ fontSize: 14 }}>{bodyText}</div>
             <div className="row" style={{ marginTop: 14 }}>
               <button className="primary" onClick={() => onRunAnalysis(format)}>
                 Run analysis

@@ -47,10 +47,20 @@ function ImportNudge() {
   );
 }
 
-// Inline prompt card shown after import when a format hits its batch threshold.
-function AnalysisPromptCard({ format, isAnalysing, onRun, onDismiss }) {
+// Inline prompt card shown when a format hits its batch threshold.
+// isFirstRun: true  → user has N games across multiple complete batches
+// isFirstRun: false → one new batch of BATCH_THRESHOLD games is ready
+function AnalysisPromptCard({ format, totalGames, isFirstRun, isAnalysing, onRun, onDismiss }) {
   const label = FORMAT_LABEL[format] || format;
-  const count = BATCH_THRESHOLD[format] || '?';
+  const threshold = BATCH_THRESHOLD[format] || '?';
+
+  const bodyText = isFirstRun
+    ? `You have ${totalGames} ${label} games ready. We'll analyse them in batches of ${threshold} to show your progression right away.`
+    : `You have ${threshold} new ${label} games ready for your next analysis.`;
+
+  const analysingText = isFirstRun
+    ? `Analysing ${totalGames} ${label.toLowerCase()} games in batches… (may take a few minutes)`
+    : `Analysing your last ${threshold} ${label.toLowerCase()} games… (1–3 min)`;
 
   return (
     <section
@@ -76,12 +86,7 @@ function AnalysisPromptCard({ format, isAnalysing, onRun, onDismiss }) {
           >
             {label} analysis ready
           </div>
-          <div style={{ fontSize: 14 }}>
-            You have enough {label} games for a fresh analysis.
-          </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            We'll analyse your last {count} {label.toLowerCase()} games and surface recurring patterns.
-          </div>
+          <div style={{ fontSize: 14 }}>{bodyText}</div>
         </div>
         <button
           onClick={onDismiss}
@@ -103,7 +108,7 @@ function AnalysisPromptCard({ format, isAnalysing, onRun, onDismiss }) {
 
       {isAnalysing ? (
         <div className="muted" style={{ marginTop: 14, fontStyle: 'italic', fontSize: 13 }}>
-          Analysing your last {count} {label.toLowerCase()} games… (1–3 min)
+          {analysingText}
         </div>
       ) : (
         <div className="row" style={{ marginTop: 14, gap: 8 }}>
@@ -325,16 +330,24 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, []);
 
+  // Merge incoming ready-format entries (objects with {format,isFirstRun,totalGames})
+  // into state, deduplicating by format key. Later entries win (fresher data).
+  function mergeReadyFormats(incoming) {
+    if (!incoming?.length) return;
+    setReadyFormats(prev => {
+      const map = new Map(prev.map(r => [r.format, r]));
+      for (const entry of incoming) {
+        map.set(entry.format, entry);
+      }
+      return [...map.values()];
+    });
+  }
+
   async function handleImported(importData) {
     try { const { data: g } = await api.get('/games'); setGames(g); } catch { /* best-effort */ }
     try { const { data: p } = await api.get('/profile'); setProfile(p); } catch { /* best-effort */ }
     try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
-    if (importData?.readyFormats?.length) {
-      setReadyFormats(prev => {
-        const merged = new Set([...prev, ...importData.readyFormats]);
-        return [...merged];
-      });
-    }
+    mergeReadyFormats(importData?.readyFormats);
   }
 
   async function handleSave(e) {
@@ -362,12 +375,7 @@ export default function Dashboard() {
       setResult('win');
       setUserColor('white');
       await loadGames();
-      if (data?.readyFormats?.length) {
-        setReadyFormats(prev => {
-          const merged = new Set([...prev, ...data.readyFormats]);
-          return [...merged];
-        });
-      }
+      mergeReadyFormats(data?.readyFormats);
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Save failed');
     } finally {
@@ -380,7 +388,7 @@ export default function Dashboard() {
     setAnalysingFormat(format);
     try {
       await api.post('/coach/patterns/batch', { format }, { timeout: 5 * 60 * 1000 });
-      setReadyFormats(prev => prev.filter(f => f !== format));
+      setReadyFormats(prev => prev.filter(r => r.format !== format));
       try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Analysis failed';
@@ -391,7 +399,7 @@ export default function Dashboard() {
   }
 
   function dismissFormat(format) {
-    setReadyFormats(prev => prev.filter(f => f !== format));
+    setReadyFormats(prev => prev.filter(r => r.format !== format));
   }
 
   const showImportNudge =
@@ -541,10 +549,12 @@ export default function Dashboard() {
       {batchError && (
         <div className="error" style={{ marginBottom: 8 }}>{batchError}</div>
       )}
-      {readyFormats.map(format => (
+      {readyFormats.map(({ format, isFirstRun, totalGames }) => (
         <AnalysisPromptCard
           key={format}
           format={format}
+          totalGames={totalGames}
+          isFirstRun={isFirstRun}
           isAnalysing={analysingFormat === format}
           onRun={() => handleRunBatchAnalysis(format)}
           onDismiss={() => dismissFormat(format)}

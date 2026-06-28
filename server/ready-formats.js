@@ -3,13 +3,14 @@
 const { query } = require('./db');
 const { BATCH_THRESHOLD } = require('./format');
 
-// Returns the list of formats that are ready for a new analysis batch.
+// Returns formats ready for a new analysis batch, with metadata.
 //
 // A format is ready if EITHER:
-//   a) games_since_last_batch >= threshold  (the normal incremental path), OR
-//   b) no batch has ever completed for this format AND total games >= threshold
-//      (covers users who had games before the feature shipped — their counter
-//       was initialised to 0 by the backfill and was never incremented).
+//   a) games_since_last_batch >= threshold  (normal incremental path), OR
+//   b) no batch has ever completed AND total games >= threshold
+//      (first-run path — covers users who had games before the feature shipped).
+//
+// Returns: Array<{ format, isFirstRun, totalGames }>
 async function getReadyFormats(userId) {
   const { rows } = await query(
     `SELECT
@@ -31,7 +32,17 @@ async function getReadyFormats(userId) {
       if (!r.last_batch_completed_at && r.total_game_count >= threshold) return true;
       return false;
     })
-    .map(r => r.format);
+    .map(r => ({
+      format: r.format,
+      isFirstRun: !r.last_batch_completed_at,
+      totalGames: r.total_game_count,
+    }));
 }
 
-module.exports = { getReadyFormats };
+// Convenience: return just the format strings (used by import routes that only
+// need to know which formats hit threshold, not the full metadata).
+async function getReadyFormatNames(userId) {
+  return (await getReadyFormats(userId)).map(r => r.format);
+}
+
+module.exports = { getReadyFormats, getReadyFormatNames };

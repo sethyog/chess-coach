@@ -519,7 +519,9 @@ router.post('/conversation/:moveId', async (req, res) => {
 });
 
 // Lightweight check: which formats are ready for a new batch analysis.
-// Called on dashboard mount so the prompt appears without requiring a fresh import.
+// Returns: { readyFormats: Array<{ format, isFirstRun, totalGames }> }
+// Called on dashboard and pattern-analysis mount so the prompt appears
+// without requiring a fresh import.
 router.get('/patterns/ready', async (req, res) => {
   try {
     const readyFormats = await getReadyFormats(req.user.id);
@@ -574,8 +576,14 @@ router.post('/patterns', async (req, res) => {
 
 // Format-aware batch analysis.
 // Body: { format: 'classical' | 'rapid' | 'bullet' }
-// Creates an analysis_batches row, runs analysis on the last BATCH_THRESHOLD[format]
-// games for this format, saves results, resets format_game_counts on success.
+//
+// First run (no completed batches exist for this format):
+//   Fetches ALL games oldest-first, slices into complete fixed-size batches,
+//   analyses each sequentially, and sets games_since_last_batch to the remainder.
+//
+// Subsequent runs:
+//   Analyses exactly one new batch of the most recent BATCH_THRESHOLD games,
+//   sets games_since_last_batch to 0.
 router.post('/patterns/batch', async (req, res) => {
   const format = req.body?.format;
   if (!['classical', 'rapid', 'bullet'].includes(format)) {
@@ -586,67 +594,137 @@ router.post('/patterns/batch', async (req, res) => {
   const minGames = MIN_GAMES[format];
 
   try {
-    // Fetch the most recent threshold-many games of this format.
-    // threshold is a known integer from BATCH_THRESHOLD — safe to interpolate.
-    const games = (await query(
-      `SELECT id, opponent, played_at FROM games
-       WHERE user_id = $1 AND format = $2
-       ORDER BY played_at DESC
-       LIMIT ${threshold}`,
+    // Has any batch ever completed for this format?
+    const { rows: [priorRow] } = await query(
+      `SELECT MAX(batch_number) AS max_batch
+       FROM analysis_batches
+       WHERE user_id = $1 AND format = $2 AND status = 'completed'`,
       [req.user.id, format]
-    )).rows;
+    );
+    const priorBatchNumber = priorRow?.max_batch ?? null;
+    const isFirstRun = priorBatchNumber === null;
 
-    if (games.length < minGames) {
+    let batchSlices; // array of game-id arrays, one entry per batch to run
+    let startingBatchNumber;
+
+    if (isFirstRun) {
+      // Fetch ALL games oldest-first and slice into complete batches.
+      // threshold is a compile-time constant — safe to interpolate.
+      const allGames = (await query(
+        `SELECT id, opponent, played_at FROM games
+         WHERE user_id = $1 AND format = $2
+         ORDER BY played_at ASC`,
+        [req.user.id, format]
+      )).rows;
+
+      if (allGames.length < minGames) {
+        return res.status(400).json({
+          error: `Not enough ${format} games (need ${minGames}, have ${allGames.length})`,
+        });
+      }
+
+      const completeBatches = Math.floor(allGames.length / threshold);
+      batchSlices = [];
+      for (let i = 0; i < completeBatches; i++) {
+        batchSlices.push(allGames.slice(i * threshold, (i + 1) * threshold).map(g => g.id));
+      }
+      startingBatchNumber = 1;
+
+      console.log(
+        `[batch] first run format=${format} total=${allGames.length} ` +
+        `threshold=${threshold} completeBatches=${completeBatches} ` +
+        `remainder=${allGames.length % threshold}`
+      );
+    } else {
+      // Subsequent run: one batch of the most recent threshold games.
+      const recentGames = (await query(
+        `SELECT id, opponent, played_at FROM games
+         WHERE user_id = $1 AND format = $2
+         ORDER BY played_at DESC
+         LIMIT ${threshold}`,
+        [req.user.id, format]
+      )).rows;
+
+      if (recentGames.length < minGames) {
+        return res.status(400).json({
+          error: `Not enough ${format} games (need ${minGames}, have ${recentGames.length})`,
+        });
+      }
+
+      batchSlices = [recentGames.map(g => g.id)];
+      startingBatchNumber = priorBatchNumber + 1;
+    }
+
+    if (batchSlices.length === 0) {
       return res.status(400).json({
-        error: `Not enough ${format} games (need ${minGames}, have ${games.length})`,
+        error: `Not enough ${format} games for a complete batch (need ${threshold})`,
       });
     }
 
-    const gameIds = games.map(g => g.id);
+    // Run each batch sequentially. Stop and surface the error on any failure.
+    let lastResults;
+    let lastBatchId;
+    let lastBatchNumber;
 
-    // Next batch_number for this user+format.
-    const { rows: [{ max_batch }] } = await query(
-      `SELECT COALESCE(MAX(batch_number), 0) AS max_batch FROM analysis_batches WHERE user_id = $1 AND format = $2`,
-      [req.user.id, format]
-    );
-    const batchNumber = max_batch + 1;
+    for (let i = 0; i < batchSlices.length; i++) {
+      const gameIds = batchSlices[i];
+      const batchNumber = startingBatchNumber + i;
 
-    // Create batch row.
-    const { rows: [{ id: batchId }] } = await query(
-      `INSERT INTO analysis_batches (user_id, format, game_ids, game_count, batch_number, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
-      [req.user.id, format, JSON.stringify(gameIds), gameIds.length, batchNumber]
-    );
-
-    console.log(`[batch] created batch ${batchId} format=${format} batchNumber=${batchNumber} games=${gameIds.length}`);
-
-    let results;
-    try {
-      results = await runPatternAnalysis(req.user.id, { gameIds, format, batchId, batchNumber });
-
-      // Mark completed and reset game count.
-      await query(
-        `UPDATE analysis_batches SET status = 'completed', completed_at = NOW() WHERE id = $1`,
-        [batchId]
-      );
-      await query(
-        `UPDATE format_game_counts
-         SET games_since_last_batch = 0, last_batch_completed_at = NOW()
-         WHERE user_id = $1 AND format = $2`,
-        [req.user.id, format]
+      const { rows: [{ id: batchId }] } = await query(
+        `INSERT INTO analysis_batches (user_id, format, game_ids, game_count, batch_number, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
+        [req.user.id, format, JSON.stringify(gameIds), gameIds.length, batchNumber]
       );
 
-      console.log(`[batch] completed batch ${batchId} format=${format} patterns=${results.patterns?.length ?? 0}`);
-    } catch (analysisErr) {
-      console.error(`[batch] batch ${batchId} analysis failed:`, analysisErr);
-      await query(
-        `UPDATE analysis_batches SET status = 'failed' WHERE id = $1`,
-        [batchId]
-      );
-      throw analysisErr;
+      console.log(`[batch] created batch ${batchId} format=${format} batchNumber=${batchNumber} games=${gameIds.length}`);
+
+      try {
+        const results = await runPatternAnalysis(req.user.id, { gameIds, format, batchId, batchNumber });
+
+        await query(
+          `UPDATE analysis_batches SET status = 'completed', completed_at = NOW() WHERE id = $1`,
+          [batchId]
+        );
+
+        console.log(`[batch] completed batch ${batchId} format=${format} batchNumber=${batchNumber} patterns=${results.patterns?.length ?? 0}`);
+
+        lastResults = results;
+        lastBatchId = batchId;
+        lastBatchNumber = batchNumber;
+      } catch (analysisErr) {
+        console.error(`[batch] batch ${batchId} analysis failed:`, analysisErr);
+        await query(
+          `UPDATE analysis_batches SET status = 'failed' WHERE id = $1`,
+          [batchId]
+        );
+        throw analysisErr;
+      }
     }
 
-    res.json({ ...results, format, batchId, batchNumber });
+    // Update game count: remainder for first run (those games wait for the next
+    // batch), 0 for subsequent single-batch runs.
+    let newGamesSince;
+    if (isFirstRun) {
+      // Re-fetch total to compute remainder (game count may have changed during analysis).
+      const { rows: [{ total }] } = await query(
+        `SELECT COUNT(*)::int AS total FROM games WHERE user_id = $1 AND format = $2`,
+        [req.user.id, format]
+      );
+      newGamesSince = total % threshold;
+    } else {
+      newGamesSince = 0;
+    }
+
+    await query(
+      `UPDATE format_game_counts
+       SET games_since_last_batch = $3, last_batch_completed_at = NOW()
+       WHERE user_id = $1 AND format = $2`,
+      [req.user.id, format, newGamesSince]
+    );
+
+    console.log(`[batch] all done format=${format} batchesRun=${batchSlices.length} games_since_last_batch=${newGamesSince}`);
+
+    res.json({ ...lastResults, format, batchId: lastBatchId, batchNumber: lastBatchNumber, batchesRun: batchSlices.length });
   } catch (e) {
     console.error('Pattern batch analysis failed:', e);
     return res.status(500).json({ error: 'Analysis failed — try again' });
