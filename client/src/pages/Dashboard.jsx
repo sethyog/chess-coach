@@ -392,6 +392,7 @@ export default function Dashboard() {
     setBatchError('');
     setAnalysingFormat(format);
     setGameAnalysisProgress(null);
+    let succeeded = false;
     try {
       // Phase 1 — analyse any unanalyzed games server-side first.
       await streamGameAnalysis(format, (event) => {
@@ -409,12 +410,16 @@ export default function Dashboard() {
 
       // Phase 2 — pattern analysis.
       await api.post('/coach/patterns/batch', { format }, { timeout: 5 * 60 * 1000 });
-      setReadyFormats(prev => prev.filter(r => r.format !== format));
+      succeeded = true;
       try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Analysis failed';
       setBatchError(`${FORMAT_LABEL[format] || format}: ${msg}`);
     } finally {
+      // Batch all teardown updates together so they apply in one render.
+      // setReadyFormats (local) and setAnalysingFormat (context) must not
+      // reach the DOM in separate renders or the card briefly shows "Run analysis".
+      if (succeeded) setReadyFormats(prev => prev.filter(r => r.format !== format));
       setAnalysingFormat(null);
       setGameAnalysisProgress(null);
     }
