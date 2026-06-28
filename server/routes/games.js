@@ -5,7 +5,7 @@ const router = express.Router();
 const { query, withTransaction } = require('../db');
 const { Chess } = require('chess.js');
 const { updateProfile } = require('../profile-service');
-const { deriveFormat, extractTimeControlFromPgn } = require('../format');
+const { BATCH_THRESHOLD, deriveFormat, extractTimeControlFromPgn } = require('../format');
 
 // ─── Chess.com helpers ──────────────────────────────────────────────────────
 const TIME_CLASS_OPTIONS = new Set(['bullet', 'blitz', 'rapid', 'daily', 'all']);
@@ -92,6 +92,7 @@ router.post('/', async (req, res) => {
     const gameId = insertRes.rows[0].id;
 
     // Track new games per format for batch trigger logic.
+    let readyFormats = [];
     if (format !== 'unknown') {
       await query(
         `INSERT INTO format_game_counts (user_id, format, games_since_last_batch)
@@ -100,9 +101,16 @@ router.post('/', async (req, res) => {
            SET games_since_last_batch = format_game_counts.games_since_last_batch + 1`,
         [req.user.id, format]
       );
+      const { rows: fgcRows } = await query(
+        `SELECT format, games_since_last_batch FROM format_game_counts WHERE user_id = $1`,
+        [req.user.id]
+      );
+      readyFormats = fgcRows
+        .filter(r => BATCH_THRESHOLD[r.format] && r.games_since_last_batch >= BATCH_THRESHOLD[r.format])
+        .map(r => r.format);
     }
 
-    res.json({ id: gameId });
+    res.json({ id: gameId, readyFormats });
   } catch (e) {
     res.status(400).json({ error: 'Invalid PGN: ' + e.message });
   }
@@ -264,7 +272,23 @@ router.post('/import/chesscom', async (req, res) => {
     console.error('Profile last_import_at update failed:', e);
   }
 
-  res.json({ imported, skipped, failed, total: filtered.length, gameIds });
+  // Step 7 — check which formats have hit their batch threshold.
+  let readyFormats = [];
+  if (imported > 0) {
+    try {
+      const { rows: fgcRows } = await query(
+        `SELECT format, games_since_last_batch FROM format_game_counts WHERE user_id = $1`,
+        [req.user.id]
+      );
+      readyFormats = fgcRows
+        .filter(r => BATCH_THRESHOLD[r.format] && r.games_since_last_batch >= BATCH_THRESHOLD[r.format])
+        .map(r => r.format);
+    } catch (e) {
+      console.error('readyFormats check failed:', e.message);
+    }
+  }
+
+  res.json({ imported, skipped, failed, total: filtered.length, gameIds, readyFormats });
 });
 
 // Get all games (this user only).

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
@@ -7,6 +7,16 @@ const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 // Pattern analysis does one mapping call + N sequential per-pattern summary
 // calls. Total runtime can exceed the default axios 60s timeout.
 const PATTERN_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000;
+
+// Minimum games required to unlock per-format analysis (mirrors server/format.js MIN_GAMES).
+const MIN_GAMES = { classical: 3, rapid: 5, bullet: 8 };
+
+const FORMAT_TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'rapid', label: 'Rapid' },
+  { key: 'classical', label: 'Classical' },
+  { key: 'bullet', label: 'Bullet' },
+];
 
 function formatDate(iso) {
   if (!iso) return '';
@@ -45,77 +55,122 @@ function dateRangeFromGames(games) {
 }
 
 export default function PatternAnalysis() {
-  // state: 'loading' | 'analysing' | 'ready' | 'error'
-  const [state, setState] = useState('loading');
-  const [results, setResults] = useState(null);
-  const [error, setError] = useState('');
-  const [expanded, setExpanded] = useState({});
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialFormat = FORMAT_TABS.some(t => t.key === searchParams.get('format'))
+    ? searchParams.get('format')
+    : 'all';
+
+  const [selectedFormat, setSelectedFormat] = useState(initialFormat);
+
+  // Per-format cache: { [format]: { state: 'loading'|'ready'|'error', results, error } }
+  const [formatCache, setFormatCache] = useState({});
+
+  // Legacy "All" tab state (uses the existing re-analyse flow).
+  const [allState, setAllState] = useState('loading');
+  const [allResults, setAllResults] = useState(null);
+  const [allError, setAllError] = useState('');
   const startedRef = useRef(false);
 
+  const [expanded, setExpanded] = useState({});
+
+  // Load the "all" tab on mount using the existing logic.
   useEffect(() => {
-    // startedRef alone gates re-entry (React strict mode double-mounts the
-    // effect; we want exactly one fetch sequence per real mount).
     if (startedRef.current) return;
     startedRef.current = true;
 
-    async function runFresh() {
-      setState('analysing');
+    async function runFreshAll() {
+      setAllState('analysing');
       try {
         const { data } = await api.post('/coach/patterns', null, {
           timeout: PATTERN_ANALYSIS_TIMEOUT_MS,
         });
-        setResults(data);
+        setAllResults(data);
         if (data.error) {
-          setError(data.error);
-          setState('error');
+          setAllError(data.error);
+          setAllState('error');
         } else {
-          setState('ready');
+          setAllState('ready');
         }
       } catch (err) {
-        setError(err.response?.data?.error || err.message || 'Analysis failed');
-        setState('error');
+        setAllError(err.response?.data?.error || err.message || 'Analysis failed');
+        setAllState('error');
       }
     }
 
     (async () => {
       try {
-        const { data } = await api.get('/coach/patterns/latest');
+        const { data } = await api.get('/coach/patterns/latest?format=all');
         const hasCached = data && data.patterns != null && data.analysedAt;
         if (!hasCached) {
-          await runFresh();
+          await runFreshAll();
           return;
         }
         const age = Date.now() - new Date(data.analysedAt).getTime();
         if (age > TWENTY_FOUR_HOURS_MS) {
-          await runFresh();
+          await runFreshAll();
         } else {
-          setResults(data);
-          setState('ready');
+          setAllResults(data);
+          setAllState('ready');
         }
       } catch (err) {
-        setError(err.response?.data?.error || err.message || 'Failed to load');
-        setState('error');
+        setAllError(err.response?.data?.error || err.message || 'Failed to load');
+        setAllState('error');
       }
     })();
   }, []);
 
-  async function handleReanalyse() {
-    setError('');
-    setState('analysing');
+  // Load a specific format tab's results (lazy — only when tab is first selected).
+  async function loadFormat(fmt) {
+    if (fmt === 'all') return; // handled separately above
+    if (formatCache[fmt]) return; // already loaded or loading
+
+    setFormatCache(prev => ({ ...prev, [fmt]: { state: 'loading', results: null, error: '' } }));
+    try {
+      const { data } = await api.get(`/coach/patterns/latest?format=${fmt}`);
+      setFormatCache(prev => ({
+        ...prev,
+        [fmt]: { state: 'ready', results: data, error: '' },
+      }));
+    } catch (err) {
+      setFormatCache(prev => ({
+        ...prev,
+        [fmt]: {
+          state: 'error',
+          results: null,
+          error: err.response?.data?.error || err.message || 'Failed to load',
+        },
+      }));
+    }
+  }
+
+  function selectTab(fmt) {
+    setSelectedFormat(fmt);
+    setSearchParams({ format: fmt });
+    loadFormat(fmt);
+  }
+
+  // Load initial format if not 'all'.
+  useEffect(() => {
+    if (selectedFormat !== 'all') loadFormat(selectedFormat);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleReanalyseAll() {
+    setAllError('');
+    setAllState('analysing');
     try {
       const { data } = await api.post('/coach/patterns', null, {
         timeout: PATTERN_ANALYSIS_TIMEOUT_MS,
       });
-      setResults(data);
+      setAllResults(data);
       if (data.error) {
-        setError(data.error);
-        setState('error');
+        setAllError(data.error);
+        setAllState('error');
       } else {
-        setState('ready');
+        setAllState('ready');
       }
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Analysis failed');
-      setState('error');
+      setAllError(err.response?.data?.error || err.message || 'Analysis failed');
+      setAllState('error');
     }
   }
 
@@ -131,38 +186,54 @@ export default function PatternAnalysis() {
         Pattern analysis
       </div>
 
-      {state === 'loading' && (
-        <div className="panel">
-          <div className="empty">Loading…</div>
-        </div>
+      {/* Format tabs */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 2,
+          marginBottom: 16,
+          borderBottom: '1px solid var(--border)',
+        }}
+      >
+        {FORMAT_TABS.map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => selectTab(tab.key)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: selectedFormat === tab.key
+                ? '2px solid var(--gold)'
+                : '2px solid transparent',
+              color: selectedFormat === tab.key ? 'var(--gold)' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontFamily: 'inherit',
+              padding: '6px 14px 8px',
+              marginBottom: -1,
+              transition: 'color 0.1s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {selectedFormat === 'all' && (
+        <AllTabContent
+          state={allState}
+          results={allResults}
+          error={allError}
+          onReanalyse={handleReanalyseAll}
+          expanded={expanded}
+          onToggle={togglePattern}
+        />
       )}
 
-      {state === 'analysing' && (
-        <div className="panel">
-          <div className="empty">
-            Analysing your last {results?.gamesAnalysed || 5} games…
-            <div style={{ fontSize: 12, marginTop: 8 }}>
-              The AI maps every mistake to a principle, then writes a coach
-              summary for each recurring pattern. This usually takes 1–3
-              minutes.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {state === 'error' && (
-        <div className="panel">
-          <div className="error">{error || 'Something went wrong'}</div>
-          <div className="row" style={{ marginTop: 14 }}>
-            <button onClick={handleReanalyse}>Try again</button>
-          </div>
-        </div>
-      )}
-
-      {state === 'ready' && results && (
-        <PatternResults
-          results={results}
-          onReanalyse={handleReanalyse}
+      {selectedFormat !== 'all' && (
+        <FormatTabContent
+          format={selectedFormat}
+          cache={formatCache[selectedFormat]}
           expanded={expanded}
           onToggle={togglePattern}
         />
@@ -171,7 +242,110 @@ export default function PatternAnalysis() {
   );
 }
 
-function PatternResults({ results, onReanalyse, expanded, onToggle }) {
+// ── All tab (legacy flow with re-analyse button) ──────────────────────────────
+
+function AllTabContent({ state, results, error, onReanalyse, expanded, onToggle }) {
+  if (state === 'loading') {
+    return (
+      <div className="panel">
+        <div className="empty">Loading…</div>
+      </div>
+    );
+  }
+
+  if (state === 'analysing') {
+    return (
+      <div className="panel">
+        <div className="empty">
+          Analysing your last {results?.gamesAnalysed || 5} games…
+          <div style={{ fontSize: 12, marginTop: 8 }}>
+            The AI maps every mistake to a principle, then writes a coach
+            summary for each recurring pattern. This usually takes 1–3 minutes.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="panel">
+        <div className="error">{error || 'Something went wrong'}</div>
+        <div className="row" style={{ marginTop: 14 }}>
+          <button onClick={onReanalyse}>Try again</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'ready' && results) {
+    return (
+      <PatternResults
+        results={results}
+        onReanalyse={onReanalyse}
+        expanded={expanded}
+        onToggle={onToggle}
+      />
+    );
+  }
+
+  return null;
+}
+
+// ── Format-specific tab ───────────────────────────────────────────────────────
+
+function FormatTabContent({ format, cache, expanded, onToggle }) {
+  const label = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' }[format] || format;
+  const minGames = MIN_GAMES[format] || 3;
+
+  if (!cache || cache.state === 'loading') {
+    return (
+      <div className="panel">
+        <div className="empty">Loading…</div>
+      </div>
+    );
+  }
+
+  if (cache.state === 'error') {
+    return (
+      <div className="panel">
+        <div className="error">{cache.error || 'Failed to load'}</div>
+      </div>
+    );
+  }
+
+  const { results } = cache;
+  const hasAnalysis = results && results.patterns != null;
+
+  if (!hasAnalysis) {
+    return (
+      <div className="panel">
+        <h2>{label} analysis</h2>
+        <div className="empty">
+          Import at least {minGames} {label.toLowerCase()} games to unlock {label} analysis.
+          <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
+            Once you have enough games, import them from Dashboard and confirm "Run analysis"
+            when prompted.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <PatternResults
+      results={results}
+      formatLabel={label}
+      onReanalyse={null}
+      expanded={expanded}
+      onToggle={onToggle}
+    />
+  );
+}
+
+// ── Shared results view ───────────────────────────────────────────────────────
+
+function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle }) {
   const {
     patterns,
     gamesAnalysed,
@@ -193,6 +367,7 @@ function PatternResults({ results, onReanalyse, expanded, onToggle }) {
 
   const topPattern = patterns?.[0];
   const dateRange = dateRangeFromGames(gamesSummary);
+  const headingLabel = formatLabel ? `${formatLabel} pattern analysis` : 'Pattern analysis';
 
   return (
     <>
@@ -202,7 +377,7 @@ function PatternResults({ results, onReanalyse, expanded, onToggle }) {
           style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}
         >
           <div>
-            <h2 style={{ marginBottom: 6 }}>Pattern analysis</h2>
+            <h2 style={{ marginBottom: 6 }}>{headingLabel}</h2>
             <div className="muted" style={{ fontSize: 12 }}>
               Based on your last {gamesAnalysed} games
               {dateRange ? ` (${dateRange})` : ''}
@@ -210,7 +385,7 @@ function PatternResults({ results, onReanalyse, expanded, onToggle }) {
               Last analysed: {formatDateTime(analysedAt)}
             </div>
           </div>
-          <button onClick={onReanalyse}>Re-analyse</button>
+          {onReanalyse && <button onClick={onReanalyse}>Re-analyse</button>}
         </div>
 
         <div className="grid-2" style={{ marginTop: 18 }}>
@@ -259,8 +434,7 @@ function PatternResults({ results, onReanalyse, expanded, onToggle }) {
         </div>
       </section>
 
-      {/* Change 6: section label between summary and cards so the repeated
-          principle name reads as "overview → detail" not "duplicate" */}
+      {/* Change 6: section label between summary and cards */}
       <div
         style={{
           margin: '24px 0 10px',

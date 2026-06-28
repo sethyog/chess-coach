@@ -4,6 +4,11 @@ import { Chess } from 'chess.js';
 import { api } from '../api.js';
 import ChessComImport from '../components/ChessComImport.jsx';
 
+const FORMAT_LABEL = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' };
+
+// How many games the batch analysis will include (mirrors server/format.js BATCH_THRESHOLD).
+const BATCH_THRESHOLD = { classical: 5, rapid: 10, bullet: 15 };
+
 function formatDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -39,6 +44,76 @@ function ImportNudge() {
       New games imported since last analysis — re-run pattern analysis to
       update your weakness report.
     </div>
+  );
+}
+
+// Inline prompt card shown after import when a format hits its batch threshold.
+function AnalysisPromptCard({ format, isAnalysing, onRun, onDismiss }) {
+  const label = FORMAT_LABEL[format] || format;
+  const count = BATCH_THRESHOLD[format] || '?';
+
+  return (
+    <section
+      className="panel"
+      style={{
+        borderColor: 'var(--gold-dim)',
+        background: 'rgba(240, 192, 96, 0.05)',
+      }}
+    >
+      <div
+        className="row"
+        style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--gold)',
+              marginBottom: 4,
+            }}
+          >
+            {label} analysis ready
+          </div>
+          <div style={{ fontSize: 14 }}>
+            You have enough {label} games for a fresh analysis.
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            We'll analyse your last {count} {label.toLowerCase()} games and surface recurring patterns.
+          </div>
+        </div>
+        <button
+          onClick={onDismiss}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            fontSize: 18,
+            lineHeight: 1,
+            padding: '0 2px',
+            flexShrink: 0,
+          }}
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      </div>
+
+      {isAnalysing ? (
+        <div className="muted" style={{ marginTop: 14, fontStyle: 'italic', fontSize: 13 }}>
+          Analysing your last {count} {label.toLowerCase()} games… (1–3 min)
+        </div>
+      ) : (
+        <div className="row" style={{ marginTop: 14, gap: 8 }}>
+          <button className="primary" onClick={onRun}>
+            Run analysis
+          </button>
+          <button onClick={onDismiss}>Maybe later</button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -118,6 +193,9 @@ function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
   }
 
   const top = latest.patterns[0];
+  const formatLabel = latest.format && latest.format !== 'all'
+    ? ` · ${FORMAT_LABEL[latest.format] || latest.format}`
+    : '';
   return (
     <section className="panel">
       {showImportNudge && <ImportNudge />}
@@ -134,7 +212,7 @@ function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
               textTransform: 'uppercase',
             }}
           >
-            Top weakness
+            Top weakness{formatLabel}
           </div>
           <h2 style={{ margin: '4px 0 6px' }}>{top.principleName}</h2>
           <div className="muted" style={{ fontSize: 12 }}>
@@ -166,6 +244,11 @@ export default function Dashboard() {
   // Import section: collapsed by default; auto-expands if user has no games.
   const [importExpanded, setImportExpanded] = useState(false);
   const importInitialized = useRef(false);
+
+  // Format-aware batch analysis prompt state.
+  const [readyFormats, setReadyFormats] = useState([]);
+  const [analysingFormat, setAnalysingFormat] = useState(null);
+  const [batchError, setBatchError] = useState('');
 
   async function loadGames() {
     try {
@@ -227,10 +310,16 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  async function handleImported() {
+  async function handleImported(importData) {
     try { const { data: g } = await api.get('/games'); setGames(g); } catch { /* best-effort */ }
     try { const { data: p } = await api.get('/profile'); setProfile(p); } catch { /* best-effort */ }
     try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
+    if (importData?.readyFormats?.length) {
+      setReadyFormats(prev => {
+        const merged = new Set([...prev, ...importData.readyFormats]);
+        return [...merged];
+      });
+    }
   }
 
   async function handleSave(e) {
@@ -247,7 +336,7 @@ export default function Dashboard() {
     }
     setSaving(true);
     try {
-      await api.post('/games', {
+      const { data } = await api.post('/games', {
         pgn: trimmed,
         opponent: opponent.trim() || 'Unknown',
         result,
@@ -258,11 +347,36 @@ export default function Dashboard() {
       setResult('win');
       setUserColor('white');
       await loadGames();
+      if (data?.readyFormats?.length) {
+        setReadyFormats(prev => {
+          const merged = new Set([...prev, ...data.readyFormats]);
+          return [...merged];
+        });
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Save failed');
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleRunBatchAnalysis(format) {
+    setBatchError('');
+    setAnalysingFormat(format);
+    try {
+      await api.post('/coach/patterns/batch', { format }, { timeout: 5 * 60 * 1000 });
+      setReadyFormats(prev => prev.filter(f => f !== format));
+      try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
+    } catch (err) {
+      const msg = err.response?.data?.error || err.message || 'Analysis failed';
+      setBatchError(`${FORMAT_LABEL[format] || format}: ${msg}`);
+    } finally {
+      setAnalysingFormat(null);
+    }
+  }
+
+  function dismissFormat(format) {
+    setReadyFormats(prev => prev.filter(f => f !== format));
   }
 
   const showImportNudge =
@@ -407,6 +521,21 @@ export default function Dashboard() {
         </>
       )}
       {/* ── End collapsible import section ──────────────────────────── */}
+
+      {/* ── Format-aware analysis prompts ───────────────────────────── */}
+      {batchError && (
+        <div className="error" style={{ marginBottom: 8 }}>{batchError}</div>
+      )}
+      {readyFormats.map(format => (
+        <AnalysisPromptCard
+          key={format}
+          format={format}
+          isAnalysing={analysingFormat === format}
+          onRun={() => handleRunBatchAnalysis(format)}
+          onDismiss={() => dismissFormat(format)}
+        />
+      ))}
+      {/* ── End format analysis prompts ──────────────────────────────── */}
 
       {/* Change 2: de-emphasize locked pattern card for new users */}
       <PatternCard
