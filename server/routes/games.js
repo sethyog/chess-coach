@@ -5,7 +5,8 @@ const router = express.Router();
 const { query, withTransaction } = require('../db');
 const { Chess } = require('chess.js');
 const { updateProfile } = require('../profile-service');
-const { BATCH_THRESHOLD, deriveFormat, extractTimeControlFromPgn } = require('../format');
+const { deriveFormat, extractTimeControlFromPgn } = require('../format');
+const { getReadyFormats } = require('../ready-formats');
 
 // ─── Chess.com helpers ──────────────────────────────────────────────────────
 const TIME_CLASS_OPTIONS = new Set(['bullet', 'blitz', 'rapid', 'daily', 'all']);
@@ -101,13 +102,7 @@ router.post('/', async (req, res) => {
            SET games_since_last_batch = format_game_counts.games_since_last_batch + 1`,
         [req.user.id, format]
       );
-      const { rows: fgcRows } = await query(
-        `SELECT format, games_since_last_batch FROM format_game_counts WHERE user_id = $1`,
-        [req.user.id]
-      );
-      readyFormats = fgcRows
-        .filter(r => BATCH_THRESHOLD[r.format] && r.games_since_last_batch >= BATCH_THRESHOLD[r.format])
-        .map(r => r.format);
+      readyFormats = await getReadyFormats(req.user.id);
     }
 
     res.json({ id: gameId, readyFormats });
@@ -276,13 +271,7 @@ router.post('/import/chesscom', async (req, res) => {
   let readyFormats = [];
   if (imported > 0) {
     try {
-      const { rows: fgcRows } = await query(
-        `SELECT format, games_since_last_batch FROM format_game_counts WHERE user_id = $1`,
-        [req.user.id]
-      );
-      readyFormats = fgcRows
-        .filter(r => BATCH_THRESHOLD[r.format] && r.games_since_last_batch >= BATCH_THRESHOLD[r.format])
-        .map(r => r.format);
+      readyFormats = await getReadyFormats(req.user.id);
     } catch (e) {
       console.error('readyFormats check failed:', e.message);
     }

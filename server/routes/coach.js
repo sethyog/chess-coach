@@ -8,6 +8,7 @@ const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts'
 const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
 const { resolveCascade, ENGINE_CONSULTATION_LEVEL } = require('../engine-cascade');
 const { BATCH_THRESHOLD, MIN_GAMES } = require('../format');
+const { getReadyFormats } = require('../ready-formats');
 
 // ── Tool definition (sent to Claude on every coaching request with verified facts) ──
 const EVALUATE_MOVE_TOOL = {
@@ -514,6 +515,18 @@ router.post('/conversation/:moveId', async (req, res) => {
     }
   } catch (err) {
     console.error('Conceptual profile trigger check failed:', err);
+  }
+});
+
+// Lightweight check: which formats are ready for a new batch analysis.
+// Called on dashboard mount so the prompt appears without requiring a fresh import.
+router.get('/patterns/ready', async (req, res) => {
+  try {
+    const readyFormats = await getReadyFormats(req.user.id);
+    res.json({ readyFormats });
+  } catch (e) {
+    console.error('getReadyFormats failed:', e);
+    res.json({ readyFormats: [] });
   }
 });
 

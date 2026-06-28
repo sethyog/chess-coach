@@ -310,6 +310,21 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, []);
 
+  // On mount: check if any formats already have enough games for analysis,
+  // so the prompt appears even if the user hasn't imported since deploying.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get('/coach/patterns/ready');
+        if (!cancelled && data.readyFormats?.length) {
+          setReadyFormats(data.readyFormats);
+        }
+      } catch { /* best-effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   async function handleImported(importData) {
     try { const { data: g } = await api.get('/games'); setGames(g); } catch { /* best-effort */ }
     try { const { data: p } = await api.get('/profile'); setProfile(p); } catch { /* best-effort */ }
