@@ -7,6 +7,7 @@ const { Chess } = require('chess.js');
 const { updateProfile } = require('../profile-service');
 const { deriveFormat, extractTimeControlFromPgn } = require('../format');
 const { getReadyFormats } = require('../ready-formats');
+const { analyzeGame } = require('../analysis');
 
 // ─── Chess.com helpers ──────────────────────────────────────────────────────
 const TIME_CLASS_OPTIONS = new Set(['bullet', 'blitz', 'rapid', 'daily', 'all']);
@@ -278,6 +279,90 @@ router.post('/import/chesscom', async (req, res) => {
   }
 
   res.json({ imported, skipped, failed, total: filtered.length, gameIds, readyFormats });
+});
+
+// Analyse unanalyzed games of a given format using the server-side Stockfish engine.
+// Streams Server-Sent Events so the client can show a live progress bar.
+//
+// Body: { format: 'classical' | 'rapid' | 'bullet' }
+//
+// SSE event shapes:
+//   { type: 'start',    total }
+//   { type: 'progress', completed, total, gameId, status: 'done'|'skipped'|'error', [error] }
+//   { type: 'done',     total, completed, failed }
+router.post('/analyze-batch', async (req, res) => {
+  const { format } = req.body || {};
+  if (!['classical', 'rapid', 'bullet'].includes(format)) {
+    return res.status(400).json({ error: 'format must be one of classical, rapid, bullet' });
+  }
+
+  // Find games that belong to this user, match the format, and have no moves yet.
+  const { rows: games } = await query(
+    `SELECT g.id
+     FROM games g
+     LEFT JOIN (
+       SELECT game_id, COUNT(*) AS mc FROM moves GROUP BY game_id
+     ) m ON m.game_id = g.id
+     WHERE g.user_id = $1
+       AND g.format  = $2
+       AND (m.mc IS NULL OR m.mc = 0)
+     ORDER BY g.played_at ASC`,
+    [req.user.id, format]
+  );
+
+  // If nothing to do, return a plain JSON response (no streaming needed).
+  if (games.length === 0) {
+    return res.json({ total: 0, completed: 0, failed: 0, results: [] });
+  }
+
+  // Set up SSE stream.
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  function send(data) {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  }
+
+  const gameIds = games.map(r => r.id);
+  const total = gameIds.length;
+  let completed = 0;
+  let failed = 0;
+
+  send({ type: 'start', total });
+
+  for (const gameId of gameIds) {
+    try {
+      const result = await analyzeGame(gameId, req.user.id);
+      completed++;
+      send({
+        type:      'progress',
+        completed,
+        total,
+        gameId,
+        status:    result.skipped ? 'skipped' : 'done',
+        movesAnalyzed: result.movesAnalyzed,
+        mistakeCount:  result.mistakeCount,
+        blunderCount:  result.blunderCount,
+      });
+    } catch (err) {
+      console.error(`[analyze-batch] game ${gameId} failed:`, err.message);
+      failed++;
+      send({ type: 'progress', completed, total, gameId, status: 'error', error: err.message });
+    }
+  }
+
+  // Best-effort: refresh the player profile so computed_level reflects the
+  // newly-inserted move data before pattern analysis reads it.
+  try {
+    await updateProfile(req.user.id);
+  } catch (err) {
+    console.error('[analyze-batch] updateProfile failed:', err.message);
+  }
+
+  send({ type: 'done', total, completed, failed });
+  res.end();
 });
 
 // Get all games (this user only).

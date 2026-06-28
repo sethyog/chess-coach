@@ -51,6 +51,48 @@ function dateRangeFromGames(games) {
   return first === last ? first : `${first} – ${last}`;
 }
 
+// Read the streaming analyze-batch response and call onEvent for each SSE event.
+// Returns the final 'done' event object.
+async function streamGameAnalysis(format, onEvent) {
+  const base = import.meta.env.VITE_API_URL || '/api';
+  const resp = await fetch(`${base}/games/analyze-batch`, {
+    method:      'POST',
+    headers:     { 'Content-Type': 'application/json' },
+    body:        JSON.stringify({ format }),
+    credentials: 'include',
+  });
+
+  // Non-streaming response means 0 games needed analysis (plain JSON).
+  const contentType = resp.headers.get('content-type') || '';
+  if (!contentType.includes('text/event-stream')) {
+    const data = await resp.json();
+    return data;
+  }
+
+  const reader  = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let doneEvent = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop(); // keep trailing incomplete chunk
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const event = JSON.parse(line.slice(6));
+        onEvent(event);
+        if (event.type === 'done') doneEvent = event;
+      } catch { /* ignore malformed lines */ }
+    }
+  }
+  return doneEvent || { total: 0, completed: 0, failed: 0 };
+}
+
 export default function PatternAnalysis() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialFormat = FORMAT_TABS.some(t => t.key === searchParams.get('format'))
@@ -64,6 +106,9 @@ export default function PatternAnalysis() {
 
   const [readyFormats, setReadyFormats] = useState([]);
   const [analysingFormat, setAnalysingFormat] = useState(null);
+
+  // Game analysis phase: null = not running, { total, completed } = in progress.
+  const [gameAnalysisProgress, setGameAnalysisProgress] = useState(null);
 
   const [expanded, setExpanded] = useState({});
 
@@ -111,7 +156,23 @@ export default function PatternAnalysis() {
 
   async function handleRunBatchAnalysis(format) {
     setAnalysingFormat(format);
+    setGameAnalysisProgress(null);
     try {
+      // Phase 1 — server-side move analysis for any unanalyzed games.
+      await streamGameAnalysis(format, (event) => {
+        if (event.type === 'start' && event.total > 0) {
+          setGameAnalysisProgress({ total: event.total, completed: 0 });
+        } else if (event.type === 'progress') {
+          setGameAnalysisProgress(prev =>
+            prev ? { ...prev, completed: event.completed } : { total: event.total, completed: event.completed }
+          );
+        } else if (event.type === 'done') {
+          setGameAnalysisProgress(null);
+        }
+      });
+      setGameAnalysisProgress(null);
+
+      // Phase 2 — pattern analysis (unchanged).
       const { data } = await api.post(
         '/coach/patterns/batch',
         { format },
@@ -133,6 +194,7 @@ export default function PatternAnalysis() {
       }));
     } finally {
       setAnalysingFormat(null);
+      setGameAnalysisProgress(null);
     }
   }
 
@@ -187,6 +249,7 @@ export default function PatternAnalysis() {
         readyFormats={readyFormats}
         onRunAnalysis={handleRunBatchAnalysis}
         analysingFormat={analysingFormat}
+        gameAnalysisProgress={gameAnalysisProgress}
         expanded={expanded}
         onToggle={togglePattern}
       />
@@ -196,7 +259,7 @@ export default function PatternAnalysis() {
 
 // ── Format-specific tab ───────────────────────────────────────────────────────
 
-function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysingFormat, expanded, onToggle }) {
+function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysingFormat, gameAnalysisProgress, expanded, onToggle }) {
   const label = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' }[format] || format;
   const minGames = MIN_GAMES[format] || 3;
   const readyEntry = readyFormats.find(r => r.format === format);
@@ -246,12 +309,16 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
       ? `Analysing ${totalGames} ${label.toLowerCase()} games in batches… (may take a few minutes)`
       : `Analysing your last ${threshold} ${label.toLowerCase()} games… (1–3 min)`;
 
+    const inProgressText = gameAnalysisProgress
+      ? `Analysing games: ${gameAnalysisProgress.completed} / ${gameAnalysisProgress.total}…`
+      : analysingText;
+
     return (
       <div className="panel">
         <h2>{label} analysis</h2>
         {isAnalysing ? (
           <div className="muted" style={{ fontStyle: 'italic', fontSize: 13 }}>
-            {analysingText}
+            {inProgressText}
           </div>
         ) : (
           <>
