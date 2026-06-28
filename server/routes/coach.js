@@ -574,12 +574,13 @@ router.post('/patterns/batch', async (req, res) => {
 
   try {
     // Fetch the most recent threshold-many games of this format.
+    // threshold is a known integer from BATCH_THRESHOLD — safe to interpolate.
     const games = (await query(
       `SELECT id, opponent, played_at FROM games
        WHERE user_id = $1 AND format = $2
        ORDER BY played_at DESC
-       LIMIT $3`,
-      [req.user.id, format, threshold]
+       LIMIT ${threshold}`,
+      [req.user.id, format]
     )).rows;
 
     if (games.length < minGames) {
