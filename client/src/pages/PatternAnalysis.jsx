@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, streamGameAnalysis } from '../api.js';
+import { useAnalysis } from '../AnalysisContext.jsx';
 
 // Pattern analysis does one mapping call + N sequential per-pattern summary
 // calls. Total runtime can exceed the default axios 60s timeout.
@@ -63,10 +64,7 @@ export default function PatternAnalysis() {
   const [formatCache, setFormatCache] = useState({});
 
   const [readyFormats, setReadyFormats] = useState([]);
-  const [analysingFormat, setAnalysingFormat] = useState(null);
-
-  // Game analysis phase: null = not running, { total, completed } = in progress.
-  const [gameAnalysisProgress, setGameAnalysisProgress] = useState(null);
+  const { analysingFormat, setAnalysingFormat, gameAnalysisProgress, setGameAnalysisProgress } = useAnalysis();
 
   const [expanded, setExpanded] = useState({});
 

@@ -15,6 +15,7 @@ import PatternAnalysis from './pages/PatternAnalysis.jsx';
 import Admin from './pages/Admin.jsx';
 import Login from './pages/Login.jsx';
 import { AuthProvider, useAuth } from './AuthContext.jsx';
+import { AnalysisProvider } from './AnalysisContext.jsx';
 import { api } from './api.js';
 
 // Renders the Login screen in place of any protected content until /auth/me
@@ -130,20 +131,22 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Shell>
-          <RequireAuth>
-            <OnboardingGate>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/onboarding" element={<Onboarding />} />
-                <Route path="/patterns" element={<PatternAnalysis />} />
-                <Route path="/game/:id" element={<GameReview />} />
-                <Route path="/game/:id/move/:moveId" element={<Coaching />} />
-                <Route path="/admin" element={<Admin />} />
-              </Routes>
-            </OnboardingGate>
-          </RequireAuth>
-        </Shell>
+        <AnalysisProvider>
+          <Shell>
+            <RequireAuth>
+              <OnboardingGate>
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/onboarding" element={<Onboarding />} />
+                  <Route path="/patterns" element={<PatternAnalysis />} />
+                  <Route path="/game/:id" element={<GameReview />} />
+                  <Route path="/game/:id/move/:moveId" element={<Coaching />} />
+                  <Route path="/admin" element={<Admin />} />
+                </Routes>
+              </OnboardingGate>
+            </RequireAuth>
+          </Shell>
+        </AnalysisProvider>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -594,6 +594,15 @@ router.post('/patterns/batch', async (req, res) => {
   const minGames = MIN_GAMES[format];
 
   try {
+    // Reject concurrent runs for the same user+format.
+    const { rows: [pendingRow] } = await query(
+      `SELECT id FROM analysis_batches WHERE user_id = $1 AND format = $2 AND status = 'pending' LIMIT 1`,
+      [req.user.id, format]
+    );
+    if (pendingRow) {
+      return res.status(409).json({ error: 'Analysis already in progress for this format' });
+    }
+
     // Has any batch ever completed for this format?
     const { rows: [priorRow] } = await query(
       `SELECT MAX(batch_number) AS max_batch

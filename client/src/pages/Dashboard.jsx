@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { api, streamGameAnalysis } from '../api.js';
 import ChessComImport from '../components/ChessComImport.jsx';
+import { useAnalysis } from '../AnalysisContext.jsx';
 
 const FORMAT_LABEL = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' };
 
@@ -256,8 +257,7 @@ export default function Dashboard() {
 
   // Format-aware batch analysis prompt state.
   const [readyFormats, setReadyFormats] = useState([]);
-  const [analysingFormat, setAnalysingFormat] = useState(null);
-  const [gameAnalysisProgress, setGameAnalysisProgress] = useState(null);
+  const { analysingFormat, setAnalysingFormat, gameAnalysisProgress, setGameAnalysisProgress } = useAnalysis();
   const [batchError, setBatchError] = useState('');
 
   async function loadGames() {
