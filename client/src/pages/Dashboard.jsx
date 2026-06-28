@@ -7,7 +7,7 @@ import ChessComImport from '../components/ChessComImport.jsx';
 const FORMAT_LABEL = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' };
 
 // How many games the batch analysis will include (mirrors server/format.js BATCH_THRESHOLD).
-const BATCH_THRESHOLD = { classical: 5, rapid: 10, bullet: 15 };
+const BATCH_THRESHOLD = { classical: 3, rapid: 5, bullet: 8 };
 
 function formatDate(iso) {
   if (!iso) return '';

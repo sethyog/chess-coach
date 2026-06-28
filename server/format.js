@@ -4,9 +4,9 @@
 // These are the only place these numbers live. Import from here everywhere.
 
 const BATCH_THRESHOLD = {
-  classical: 5,
-  rapid:     10,
-  bullet:    15,
+  classical: 3,
+  rapid:     5,
+  bullet:    8,
 };
 
 const MIN_GAMES = {
