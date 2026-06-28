@@ -594,12 +594,18 @@ router.post('/patterns/batch', async (req, res) => {
   const minGames = MIN_GAMES[format];
 
   try {
-    // Reject concurrent runs for the same user+format.
-    const { rows: [pendingRow] } = await query(
-      `SELECT id FROM analysis_batches WHERE user_id = $1 AND format = $2 AND status = 'pending' LIMIT 1`,
+    // Reject concurrent runs for the same user+format, but only for recently
+    // started batches. A pending batch older than 5 minutes is considered stuck
+    // (client disconnected, server restarted, etc.) and the ON CONFLICT upsert
+    // below will reset it rather than blocking the user indefinitely.
+    const { rows: [activePending] } = await query(
+      `SELECT id FROM analysis_batches
+       WHERE user_id = $1 AND format = $2 AND status = 'pending'
+         AND created_at > NOW() - INTERVAL '5 minutes'
+       LIMIT 1`,
       [req.user.id, format]
     );
-    if (pendingRow) {
+    if (activePending) {
       return res.status(409).json({ error: 'Analysis already in progress for this format' });
     }
 

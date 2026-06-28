@@ -127,6 +127,33 @@ function AnalysisPromptCard({ format, totalGames, isFirstRun, isAnalysing, gameA
   );
 }
 
+function AnalysisDoneCard({ format, onDismiss }) {
+  const label = FORMAT_LABEL[format] || format;
+  return (
+    <section
+      className="panel"
+      style={{ borderColor: 'var(--gold-dim)', background: 'rgba(240, 192, 96, 0.05)' }}
+    >
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--gold)', marginBottom: 4 }}>
+            {label} analysis complete
+          </div>
+          <div style={{ fontSize: 14 }}>
+            Your results are ready.{' '}
+            <Link to="/patterns" style={{ color: 'var(--gold)' }}>View pattern analysis →</Link>
+          </div>
+        </div>
+        <button
+          onClick={onDismiss}
+          style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+          aria-label="Dismiss"
+        >×</button>
+      </div>
+    </section>
+  );
+}
+
 function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
   const wrapStyle = {
     opacity: dimmed ? 0.45 : 1,
@@ -257,6 +284,7 @@ export default function Dashboard() {
 
   // Format-aware batch analysis prompt state.
   const [readyFormats, setReadyFormats] = useState([]);
+  const [completedFormats, setCompletedFormats] = useState(new Set());
   const { analysingFormat, setAnalysingFormat, gameAnalysisProgress, setGameAnalysisProgress } = useAnalysis();
   const [batchError, setBatchError] = useState('');
 
@@ -392,7 +420,6 @@ export default function Dashboard() {
     setBatchError('');
     setAnalysingFormat(format);
     setGameAnalysisProgress(null);
-    let succeeded = false;
     try {
       // Phase 1 — analyse any unanalyzed games server-side first.
       await streamGameAnalysis(format, (event) => {
@@ -406,20 +433,16 @@ export default function Dashboard() {
           setGameAnalysisProgress(null);
         }
       });
-      setGameAnalysisProgress(null);
 
       // Phase 2 — pattern analysis.
       await api.post('/coach/patterns/batch', { format }, { timeout: 5 * 60 * 1000 });
-      succeeded = true;
-      try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
+
+      setCompletedFormats(prev => new Set([...prev, format]));
+      api.get('/coach/patterns/latest').then(({ data: l }) => setLatest(l)).catch(() => {});
     } catch (err) {
       const msg = err.response?.data?.error || err.message || 'Analysis failed';
       setBatchError(`${FORMAT_LABEL[format] || format}: ${msg}`);
     } finally {
-      // Batch all teardown updates together so they apply in one render.
-      // setReadyFormats (local) and setAnalysingFormat (context) must not
-      // reach the DOM in separate renders or the card briefly shows "Run analysis".
-      if (succeeded) setReadyFormats(prev => prev.filter(r => r.format !== format));
       setAnalysingFormat(null);
       setGameAnalysisProgress(null);
     }
@@ -576,18 +599,22 @@ export default function Dashboard() {
       {batchError && (
         <div className="error" style={{ marginBottom: 8 }}>{batchError}</div>
       )}
-      {readyFormats.map(({ format, isFirstRun, totalGames }) => (
-        <AnalysisPromptCard
-          key={format}
-          format={format}
-          totalGames={totalGames}
-          isFirstRun={isFirstRun}
-          isAnalysing={analysingFormat === format}
-          gameAnalysisProgress={analysingFormat === format ? gameAnalysisProgress : null}
-          onRun={() => handleRunBatchAnalysis(format)}
-          onDismiss={() => dismissFormat(format)}
-        />
-      ))}
+      {readyFormats.map(({ format, isFirstRun, totalGames }) =>
+        completedFormats.has(format) ? (
+          <AnalysisDoneCard key={format} format={format} onDismiss={() => dismissFormat(format)} />
+        ) : (
+          <AnalysisPromptCard
+            key={format}
+            format={format}
+            totalGames={totalGames}
+            isFirstRun={isFirstRun}
+            isAnalysing={analysingFormat === format}
+            gameAnalysisProgress={analysingFormat === format ? gameAnalysisProgress : null}
+            onRun={() => handleRunBatchAnalysis(format)}
+            onDismiss={() => dismissFormat(format)}
+          />
+        )
+      )}
       {/* ── End format analysis prompts ──────────────────────────────── */}
 
       {/* Change 2: de-emphasize locked pattern card for new users */}
