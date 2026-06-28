@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, streamGameAnalysis } from '../api.js';
 
 // Pattern analysis does one mapping call + N sequential per-pattern summary
 // calls. Total runtime can exceed the default axios 60s timeout.
@@ -49,48 +49,6 @@ function dateRangeFromGames(games) {
   const first = formatDate(dates[0].toISOString());
   const last = formatDate(dates[dates.length - 1].toISOString());
   return first === last ? first : `${first} – ${last}`;
-}
-
-// Read the streaming analyze-batch response and call onEvent for each SSE event.
-// Returns the final 'done' event object.
-async function streamGameAnalysis(format, onEvent) {
-  const base = import.meta.env.VITE_API_URL || '/api';
-  const resp = await fetch(`${base}/games/analyze-batch`, {
-    method:      'POST',
-    headers:     { 'Content-Type': 'application/json' },
-    body:        JSON.stringify({ format }),
-    credentials: 'include',
-  });
-
-  // Non-streaming response means 0 games needed analysis (plain JSON).
-  const contentType = resp.headers.get('content-type') || '';
-  if (!contentType.includes('text/event-stream')) {
-    const data = await resp.json();
-    return data;
-  }
-
-  const reader  = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let doneEvent = null;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop(); // keep trailing incomplete chunk
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        onEvent(event);
-        if (event.type === 'done') doneEvent = event;
-      } catch { /* ignore malformed lines */ }
-    }
-  }
-  return doneEvent || { total: 0, completed: 0, failed: 0 };
 }
 
 export default function PatternAnalysis() {

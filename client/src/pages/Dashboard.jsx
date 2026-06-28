@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
-import { api } from '../api.js';
+import { api, streamGameAnalysis } from '../api.js';
 import ChessComImport from '../components/ChessComImport.jsx';
 
 const FORMAT_LABEL = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' };
@@ -50,7 +50,7 @@ function ImportNudge() {
 // Inline prompt card shown when a format hits its batch threshold.
 // isFirstRun: true  → user has N games across multiple complete batches
 // isFirstRun: false → one new batch of BATCH_THRESHOLD games is ready
-function AnalysisPromptCard({ format, totalGames, isFirstRun, isAnalysing, onRun, onDismiss }) {
+function AnalysisPromptCard({ format, totalGames, isFirstRun, isAnalysing, gameAnalysisProgress, onRun, onDismiss }) {
   const label = FORMAT_LABEL[format] || format;
   const threshold = BATCH_THRESHOLD[format] || '?';
 
@@ -58,9 +58,13 @@ function AnalysisPromptCard({ format, totalGames, isFirstRun, isAnalysing, onRun
     ? `You have ${totalGames} ${label} games ready. We'll analyse them in batches of ${threshold} to show your progression right away.`
     : `You have ${threshold} new ${label} games ready for your next analysis.`;
 
-  const analysingText = isFirstRun
+  const patternAnalysingText = isFirstRun
     ? `Analysing ${totalGames} ${label.toLowerCase()} games in batches… (may take a few minutes)`
     : `Analysing your last ${threshold} ${label.toLowerCase()} games… (1–3 min)`;
+
+  const analysingText = gameAnalysisProgress
+    ? `Analysing games: ${gameAnalysisProgress.completed} / ${gameAnalysisProgress.total}…`
+    : patternAnalysingText;
 
   return (
     <section
@@ -253,6 +257,7 @@ export default function Dashboard() {
   // Format-aware batch analysis prompt state.
   const [readyFormats, setReadyFormats] = useState([]);
   const [analysingFormat, setAnalysingFormat] = useState(null);
+  const [gameAnalysisProgress, setGameAnalysisProgress] = useState(null);
   const [batchError, setBatchError] = useState('');
 
   async function loadGames() {
@@ -386,7 +391,23 @@ export default function Dashboard() {
   async function handleRunBatchAnalysis(format) {
     setBatchError('');
     setAnalysingFormat(format);
+    setGameAnalysisProgress(null);
     try {
+      // Phase 1 — analyse any unanalyzed games server-side first.
+      await streamGameAnalysis(format, (event) => {
+        if (event.type === 'start' && event.total > 0) {
+          setGameAnalysisProgress({ total: event.total, completed: 0 });
+        } else if (event.type === 'progress') {
+          setGameAnalysisProgress(prev =>
+            prev ? { ...prev, completed: event.completed } : { total: event.total, completed: event.completed }
+          );
+        } else if (event.type === 'done') {
+          setGameAnalysisProgress(null);
+        }
+      });
+      setGameAnalysisProgress(null);
+
+      // Phase 2 — pattern analysis.
       await api.post('/coach/patterns/batch', { format }, { timeout: 5 * 60 * 1000 });
       setReadyFormats(prev => prev.filter(r => r.format !== format));
       try { const { data: l } = await api.get('/coach/patterns/latest'); setLatest(l); } catch { /* best-effort */ }
@@ -395,6 +416,7 @@ export default function Dashboard() {
       setBatchError(`${FORMAT_LABEL[format] || format}: ${msg}`);
     } finally {
       setAnalysingFormat(null);
+      setGameAnalysisProgress(null);
     }
   }
 
@@ -556,6 +578,7 @@ export default function Dashboard() {
           totalGames={totalGames}
           isFirstRun={isFirstRun}
           isAnalysing={analysingFormat === format}
+          gameAnalysisProgress={analysingFormat === format ? gameAnalysisProgress : null}
           onRun={() => handleRunBatchAnalysis(format)}
           onDismiss={() => dismissFormat(format)}
         />
