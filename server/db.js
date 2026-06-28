@@ -158,6 +158,17 @@ async function initDb() {
       console.log('Migration: added games.user_color');
     }
 
+    if (!await columnExists(client, 'games', 'time_control')) {
+      await client.query('ALTER TABLE games ADD COLUMN time_control TEXT');
+      console.log('Migration: added games.time_control');
+    }
+
+    if (!await columnExists(client, 'games', 'format')) {
+      await client.query(`ALTER TABLE games ADD COLUMN format TEXT
+        CHECK (format IN ('classical', 'rapid', 'bullet', 'unknown')) DEFAULT 'unknown'`);
+      console.log("Migration: added games.format (default 'unknown')");
+    }
+
     // Composite unique index on (user_id, external_id). Two users who played
     // each other can both import the same Chess.com game. NULLs are distinct
     // in Postgres (same semantics as SQLite), so Layer-3 PGN dedup still
@@ -345,6 +356,56 @@ async function initDb() {
     if (!await columnExists(client, 'coaching_facts', 'engine_calls_used')) {
       await client.query('ALTER TABLE coaching_facts ADD COLUMN engine_calls_used INTEGER NOT NULL DEFAULT 0');
       console.log('Migration: added coaching_facts.engine_calls_used');
+    }
+
+    // ── analysis_batches ─────────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS analysis_batches (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        format TEXT NOT NULL
+          CHECK (format IN ('classical', 'rapid', 'bullet', 'all')),
+        game_ids JSONB NOT NULL,
+        game_count INTEGER NOT NULL,
+        batch_number INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'completed', 'failed')),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        UNIQUE(user_id, format, batch_number)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_analysis_batches_user_format ON analysis_batches(user_id, format)`);
+
+    // ── format_game_counts ───────────────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS format_game_counts (
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        format TEXT NOT NULL
+          CHECK (format IN ('classical', 'rapid', 'bullet')),
+        games_since_last_batch INTEGER NOT NULL DEFAULT 0,
+        last_batch_completed_at TIMESTAMPTZ,
+        PRIMARY KEY (user_id, format)
+      )
+    `);
+
+    // ── pattern_analyses — format columns ────────────────────────────────────
+    if (!await columnExists(client, 'pattern_analyses', 'format')) {
+      await client.query(`ALTER TABLE pattern_analyses ADD COLUMN format TEXT
+        CHECK (format IN ('classical', 'rapid', 'bullet', 'all')) DEFAULT 'all'`);
+      // Mark pre-existing rows as legacy 'all' (they predate format-aware analysis).
+      await client.query(`UPDATE pattern_analyses SET format = 'all' WHERE format IS NULL`);
+      console.log("Migration: added pattern_analyses.format (existing rows set to 'all')");
+    }
+
+    if (!await columnExists(client, 'pattern_analyses', 'batch_id')) {
+      await client.query(`ALTER TABLE pattern_analyses ADD COLUMN batch_id INTEGER REFERENCES analysis_batches(id)`);
+      console.log('Migration: added pattern_analyses.batch_id');
+    }
+
+    if (!await columnExists(client, 'pattern_analyses', 'batch_number')) {
+      await client.query('ALTER TABLE pattern_analyses ADD COLUMN batch_number INTEGER');
+      console.log('Migration: added pattern_analyses.batch_number');
     }
 
     console.log('Database initialized');

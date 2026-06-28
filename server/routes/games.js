@@ -5,6 +5,7 @@ const router = express.Router();
 const { query, withTransaction } = require('../db');
 const { Chess } = require('chess.js');
 const { updateProfile } = require('../profile-service');
+const { deriveFormat, extractTimeControlFromPgn } = require('../format');
 
 // ─── Chess.com helpers ──────────────────────────────────────────────────────
 const TIME_CLASS_OPTIONS = new Set(['bullet', 'blitz', 'rapid', 'daily', 'all']);
@@ -79,11 +80,29 @@ router.post('/', async (req, res) => {
       (userColor === 'white' || userColor === 'black')
         ? userColor
         : deriveUserColorFromResult(pgn, result);
+
+    const timeControl = extractTimeControlFromPgn(pgn);
+    const format = deriveFormat({ timeControlStr: timeControl });
+
     const insertRes = await query(
-      'INSERT INTO games (user_id, pgn, opponent, result, user_color) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [req.user.id, pgn, opponent || 'Unknown', result || '?', resolvedColor]
+      `INSERT INTO games (user_id, pgn, opponent, result, user_color, time_control, format)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [req.user.id, pgn, opponent || 'Unknown', result || '?', resolvedColor, timeControl, format]
     );
-    res.json({ id: insertRes.rows[0].id });
+    const gameId = insertRes.rows[0].id;
+
+    // Track new games per format for batch trigger logic.
+    if (format !== 'unknown') {
+      await query(
+        `INSERT INTO format_game_counts (user_id, format, games_since_last_batch)
+         VALUES ($1, $2, 1)
+         ON CONFLICT (user_id, format) DO UPDATE
+           SET games_since_last_batch = format_game_counts.games_since_last_batch + 1`,
+        [req.user.id, format]
+      );
+    }
+
+    res.json({ id: gameId });
   } catch (e) {
     res.status(400).json({ error: 'Invalid PGN: ' + e.message });
   }
@@ -197,21 +216,41 @@ router.post('/import/chesscom', async (req, res) => {
       const playedAt = Number.isFinite(g.end_time) ? new Date(g.end_time * 1000) : null;
       const userColor = userIsWhite ? 'white' : 'black';
 
+      // Derive format: Chess.com time_class takes precedence over PGN header.
+      const timeControl = extractTimeControlFromPgn(pgn);
+      const format = deriveFormat({ chesscomTimeClass: g.time_class, timeControlStr: timeControl });
+
       // Layer 2: INSERT with ON CONFLICT DO NOTHING as atomic safety net.
       // (ON CONFLICT fires for non-NULL external_id; NULLs are distinct in PG.)
       const insertRes = await query(
         `INSERT INTO games
-         (user_id, pgn, opponent, result, played_at, source, external_id, chesscom_username, user_color)
-         VALUES ($1, $2, $3, $4, $5, 'chesscom', $6, $7, $8)
+         (user_id, pgn, opponent, result, played_at, source, external_id, chesscom_username, user_color, time_control, format)
+         VALUES ($1, $2, $3, $4, $5, 'chesscom', $6, $7, $8, $9, $10)
          ON CONFLICT (user_id, external_id) DO NOTHING
          RETURNING id`,
-        [req.user.id, pgn, opponentDisplay, gameResult, playedAt, externalId, username, userColor]
+        [req.user.id, pgn, opponentDisplay, gameResult, playedAt, externalId, username, userColor, timeControl, format]
       );
 
       if (insertRes.rowCount === 0) { skipped++; continue; }
 
+      const newGameId = insertRes.rows[0].id;
       imported++;
-      gameIds.push(insertRes.rows[0].id);
+      gameIds.push(newGameId);
+
+      // Track new games per format for batch trigger logic.
+      if (format !== 'unknown') {
+        try {
+          await query(
+            `INSERT INTO format_game_counts (user_id, format, games_since_last_batch)
+             VALUES ($1, $2, 1)
+             ON CONFLICT (user_id, format) DO UPDATE
+               SET games_since_last_batch = format_game_counts.games_since_last_batch + 1`,
+            [req.user.id, format]
+          );
+        } catch (e) {
+          console.error('format_game_counts update failed:', e.message);
+        }
+      }
     } catch (err) {
       console.error('Chess.com import per-game failure:', err);
       failed++;
