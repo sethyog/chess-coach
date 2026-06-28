@@ -670,9 +670,15 @@ router.post('/patterns/batch', async (req, res) => {
       const gameIds = batchSlices[i];
       const batchNumber = startingBatchNumber + i;
 
+      // ON CONFLICT: a prior failed/pending run may have already inserted this
+      // batch_number — reset it rather than violating the unique constraint.
       const { rows: [{ id: batchId }] } = await query(
         `INSERT INTO analysis_batches (user_id, format, game_ids, game_count, batch_number, status)
-         VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
+         VALUES ($1, $2, $3, $4, $5, 'pending')
+         ON CONFLICT (user_id, format, batch_number)
+         DO UPDATE SET game_ids = EXCLUDED.game_ids, game_count = EXCLUDED.game_count,
+                       status = 'pending', completed_at = NULL
+         RETURNING id`,
         [req.user.id, format, JSON.stringify(gameIds), gameIds.length, batchNumber]
       );
 

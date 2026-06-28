@@ -18,7 +18,7 @@ async function main() {
     const ab = await client.query('DELETE FROM analysis_batches');
     console.log(`  deleted ${ab.rowCount} row(s)`);
 
-    console.log('Step 3: Resetting format_game_counts to actual game counts...');
+    console.log('Step 3: Resetting format_game_counts to actual game counts (moves preserved)...');
     const fgc = await client.query(`
       UPDATE format_game_counts fgc
       SET games_since_last_batch = (
@@ -46,7 +46,7 @@ async function main() {
     for (const r of fgcRows) {
       console.log(`  user=${r.user_id}  format=${r.format}  games_since_last_batch=${r.games_since_last_batch}  last_batch_completed_at=${r.last_batch_completed_at}`);
     }
-    console.log('\nDone. Paste the output above to confirm state before code changes.');
+    console.log('\nDone.');
   } finally {
     client.release();
     await pool.end();
