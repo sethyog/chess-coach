@@ -6,6 +6,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends stockfish \
     && rm -rf /var/lib/apt/lists/*
 
+ENV PATH="/usr/games:$PATH"
+
 WORKDIR /app
 
 # Install production deps first (better layer caching).
