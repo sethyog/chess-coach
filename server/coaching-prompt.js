@@ -6,21 +6,26 @@ const MAX_LEGAL_MOVES_LISTED = 40;
 
 // Appended to every coaching system prompt — tells the coach how to format its response
 // and when/how to include board demonstrations.
-function buildResponseFormatSection(lineContextAvailable) {
+// enginePv: array of SAN moves from the engine's PV (may be empty if unavailable).
+function buildResponseFormatSection(lineContextAvailable, enginePv = []) {
+  const hasPv = Array.isArray(enginePv) && enginePv.length > 0;
+  const pvInstruction = hasPv
+    ? `For "original" demonstrations: use EXACTLY the moves listed as "Engine's principal variation" in VERIFIED FACTS — do not invent or substitute moves. Include as many of those moves as illustrate the teaching point (up to the full line). Your coaching TEXT must describe the PLAN the line shows (e.g. "the knight heads for f6 to contest the centre; after the pawn trades, the rook lifts to the open file") — not just name the first move. Single-move demonstrations are fine when one move makes the point.`
+    : `For "original" demonstrations: use the engine's best move from VERIFIED FACTS as a single-move demonstration when it adds teaching value.`;
+
   const demoRules = lineContextAvailable
     ? `
 Demonstrations available this turn:
- - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show the better alternative — "from where you had the choice, Qd8+ wins."
- - "userLine": play from the END of the student's submitted line. Use this to show the flaw — "watch what happens after your moves."
- - Ideal "flaw then fix": "userLine" demo first (exposing the problem), then "original" demo (showing the better idea from the choice point).
- - Limit each demonstration to 3-5 moves; only include moves that illustrate the teaching point.
+ - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show the engine's recommended plan.
+ - "userLine": play from the END of the student's submitted line. Use this to show the flaw — "watch what happens after your moves." Keep to 1-3 moves that expose the problem.
+ - Ideal "flaw then fix": "userLine" demo first (exposing the problem), then "original" demo (showing the engine's plan from the choice point).
+ - ${pvInstruction}
  - Move quality claims must reference verified facts or engine eval — never assert quality from your own judgment.`
     : `
 Demonstrations available this turn:
- - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show move sequences on the board — e.g. the engine's recommended move and a reply, or the student's actual move followed by why it fails.
+ - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show the engine's recommended plan on the board.
  - Do NOT use "userLine" — the student has not submitted a line this turn.
- - Use demonstrations when showing moves concretely adds teaching value (student asks to see a line, Rung 4 answer, or a key tactical point).
- - Limit each demonstration to 3-5 moves.
+ - ${pvInstruction}
  - Move quality claims must reference verified facts — never assert quality from your own judgment.`;
 
   return `
@@ -104,7 +109,7 @@ function fmtEvalCp(cp) {
 // block as the sole source of board truth.
 // engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
 // includeLineDemos: true when the current turn is a line submission (enables demo instructions).
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false }) {
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [] }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -142,6 +147,7 @@ ${indentedPieceMap}
  - Engine eval before: ${fmtEvalCp(facts.engine.evalBefore)}; after: ${fmtEvalCp(facts.engine.evalAfter)}
  - Centipawn swing (loss for the moving side): ${facts.engine.centipawnSwing ?? 'unknown'}
  - Engine's preferred move: ${facts.engine.bestMove ?? 'not yet computed'}
+ - Engine's principal variation from the before-position (verified by chess.js, up to 4 plies): ${enginePv.length ? enginePv.join(', ') : 'not available'}
  - Why it was a mistake (engine-derived summary): ${facts.engine.engineReason}
  - Principle violated: ${principleViolated || 'none identified yet'}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
 
@@ -185,7 +191,7 @@ When at Rung 4 (giving the answer):
  - Frame it warmly as a lesson, not a correction.
  - Do not ask another question.
 ${buildToolSection(engineLevel)}
-${buildResponseFormatSection(includeLineDemos)}`;
+${buildResponseFormatSection(includeLineDemos, enginePv)}`;
 }
 
 // Fallback when buildPositionFacts can't run (PGN reconstruction failure,

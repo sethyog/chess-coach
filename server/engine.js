@@ -14,6 +14,9 @@ const ENGINE_TIMEOUT_MS   = 8000;  // overall per-request timeout (ms)
 const ENGINE_HASH_MB      = 32;    // hash table size — keep small for Railway
 const ENGINE_THREADS      = 1;     // single thread
 
+// Max plies to include in a coach demonstration line (2 moves per side).
+const MAX_DEMO_PLIES = 4;
+
 // ── FEN eval cache (in-process, shared across all requests) ──────────────────
 // Keyed by FEN string. Transpositions and re-evaluated positions are free.
 const evalCache = new Map();
@@ -25,9 +28,9 @@ let engineState  = 'init';   // 'init' | 'idle' | 'searching'
 let outputBuffer = '';
 
 // Per-search state reset before each search.
-let lastCp          = 0;
-let lastBestMoveUci = null;
-let lastMateIn      = null;
+let lastCp     = 0;
+let lastPvUci  = [];   // full principal variation from the deepest info line
+let lastMateIn = null;
 
 // Current in-flight request.
 let current = null;  // { fen, resolve, reject, timeoutHandle }
@@ -70,19 +73,24 @@ function handleLine(line) {
         lastMateIn = null;
       }
 
-      // Best move from the PV (first move of the principal variation).
-      const pvMatch = line.match(/ pv ([a-h][1-8][a-h][1-8][qrbn]?)/);
-      if (pvMatch) lastBestMoveUci = pvMatch[1];
+      // Full principal variation — overwrite on each info line so the last
+      // (deepest-depth) line wins, giving the most accurate PV.
+      const pvIdx = line.indexOf(' pv ');
+      if (pvIdx !== -1) {
+        lastPvUci = line.slice(pvIdx + 4).trim()
+          .split(/\s+/)
+          .filter(m => /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(m));
+      }
     }
 
     if (line.startsWith('bestmove')) {
       const uci = line.split(' ')[1];
-      if (uci && uci !== '(none)' && !lastBestMoveUci) lastBestMoveUci = uci;
+      if (uci && uci !== '(none)' && lastPvUci.length === 0) lastPvUci = [uci];
 
       clearTimeout(current.timeoutHandle);
       engineState = 'idle';
 
-      const result  = { ok: true, evalCp: lastCp, bestMoveUci: lastBestMoveUci, mateIn: lastMateIn };
+      const result  = { ok: true, evalCp: lastCp, bestMoveUci: lastPvUci[0] ?? null, pvUci: lastPvUci.slice(), mateIn: lastMateIn };
       const resolve = current.resolve;
       current = null;
       resolve(result);
@@ -100,9 +108,9 @@ function drainQueue() {
   engineState = 'searching';
 
   // Reset per-search state.
-  lastCp          = 0;
-  lastBestMoveUci = null;
-  lastMateIn      = null;
+  lastCp     = 0;
+  lastPvUci  = [];
+  lastMateIn = null;
 
   current.timeoutHandle = setTimeout(() => {
     console.error('[engine] search timeout for FEN:', current.fen.slice(0, 50));
@@ -197,6 +205,36 @@ function uciToSan(fen, uciMove) {
   }
 }
 
+// ── PV helper ─────────────────────────────────────────────────────────────────
+// Returns the engine's principal variation from `fen` as a list of SAN moves,
+// capped at MAX_DEMO_PLIES. Each UCI move is applied and validated with chess.js;
+// the first invalid move stops the sequence (defensive).
+async function getEnginePv(fen) {
+  const result = await evaluateFen(fen);
+  if (!result.ok || !result.pvUci || result.pvUci.length === 0) return [];
+
+  const chess = new Chess(fen);
+  const sanMoves = [];
+  for (const uci of result.pvUci.slice(0, MAX_DEMO_PLIES)) {
+    try {
+      const move = chess.move({
+        from:      uci.slice(0, 2),
+        to:        uci.slice(2, 4),
+        promotion: uci.length === 5 ? uci[4] : undefined,
+      });
+      if (!move) {
+        console.warn('[engine] PV move %s failed validation — stopping PV at %d plies', uci, sanMoves.length);
+        break;
+      }
+      sanMoves.push(move.san);
+    } catch (err) {
+      console.warn('[engine] PV UCI→SAN error at %s:', uci, err.message);
+      break;
+    }
+  }
+  return sanMoves;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
@@ -232,6 +270,7 @@ async function evaluateFen(fen) {
     evalCp:      raw.evalCp,
     bestMove:    uciToSan(fen, raw.bestMoveUci),
     bestMoveUci: raw.bestMoveUci,
+    pvUci:       raw.pvUci || [],
     mateIn:      raw.mateIn,
   };
 
@@ -252,9 +291,11 @@ startEngine();
 
 module.exports = {
   evaluateFen,
+  getEnginePv,
   isEngineAvailable,
   getEvalCacheSize,
   // Constants exposed for logging / test harness.
   ENGINE_DEPTH,
   ENGINE_MOVETIME_MS,
+  MAX_DEMO_PLIES,
 };

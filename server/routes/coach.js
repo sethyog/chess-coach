@@ -8,6 +8,7 @@ const { logCandidate } = require('../principle-candidates');
 const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
 const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
 const { resolveCascade, ENGINE_CONSULTATION_LEVEL } = require('../engine-cascade');
+const { getEnginePv } = require('../engine');
 const { BATCH_THRESHOLD, MIN_GAMES } = require('../format');
 const { getReadyFormats } = require('../ready-formats');
 
@@ -503,6 +504,17 @@ router.post('/conversation/:moveId', async (req, res) => {
     console.warn(`Coach falling back to degraded prompt for move ${moveId} (no verified facts).`);
   }
 
+  // Compute engine PV for the before-position so the coach can demonstrate the
+  // engine's recommended short line. Best-effort: failures yield an empty array.
+  let enginePv = [];
+  if (facts && fenBefore) {
+    try {
+      enginePv = await getEnginePv(fenBefore);
+    } catch (err) {
+      console.warn('[coach] getEnginePv failed for move', moveId, ':', err.message);
+    }
+  }
+
   const systemPrompt = facts
     ? buildVerifiedFactsPrompt({
         facts,
@@ -512,6 +524,7 @@ router.post('/conversation/:moveId', async (req, res) => {
         maxTurns,
         forceAnswer,
         engineLevel: ENGINE_CONSULTATION_LEVEL,
+        enginePv,
       })
     : buildDegradedPrompt({
         profile,
@@ -746,6 +759,16 @@ router.post('/conversation/:moveId/line', async (req, res) => {
     }
   }
 
+  // Compute engine PV from the before-position (= startFen for line turns).
+  let enginePv = [];
+  if (facts && startFen) {
+    try {
+      enginePv = await getEnginePv(startFen);
+    } catch (err) {
+      console.warn('[coach/line] getEnginePv failed for move', moveId, ':', err.message);
+    }
+  }
+
   const systemPrompt = facts
     ? buildVerifiedFactsPrompt({
         facts,
@@ -756,6 +779,7 @@ router.post('/conversation/:moveId/line', async (req, res) => {
         forceAnswer,
         engineLevel: ENGINE_CONSULTATION_LEVEL,
         includeLineDemos: true,
+        enginePv,
       })
     : buildDegradedPrompt({
         profile,
