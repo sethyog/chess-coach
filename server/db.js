@@ -192,6 +192,19 @@ async function initDb() {
       )
     `);
 
+    if (!await columnExists(client, 'moves', 'best_move')) {
+      await client.query('ALTER TABLE moves ADD COLUMN best_move TEXT');
+      console.log('Migration: added moves.best_move');
+    }
+    if (!await columnExists(client, 'moves', 'eval_before')) {
+      await client.query('ALTER TABLE moves ADD COLUMN eval_before INTEGER');
+      console.log('Migration: added moves.eval_before');
+    }
+    if (!await columnExists(client, 'moves', 'eval_after')) {
+      await client.query('ALTER TABLE moves ADD COLUMN eval_after INTEGER');
+      console.log('Migration: added moves.eval_after');
+    }
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS conversations (
         id SERIAL PRIMARY KEY,

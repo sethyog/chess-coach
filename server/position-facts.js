@@ -115,11 +115,9 @@ function describePlayedMove(chessAfter, moveObj) {
 }
 
 // Builds a short, factual statement of why the move was a mistake from the
-// signals we ALREADY have stored (classification + centipawn_loss + the
-// played-move details from chess.js). No PV, no bestMove — server-side
-// Stockfish isn't wired up yet, so this is intentionally a thin honest
-// summary. The prompt rules (Step 5) instruct the LLM not to invent
-// tactical lines beyond what's listed here.
+// signals we have stored (classification + centipawn_loss + played-move details).
+// The bestMove is surfaced separately in engineFacts; this summary covers the
+// "why it was bad" framing without inventing tactical lines.
 function buildEngineReason({ classification, centipawnLoss, playedMoveDetails }) {
   const parts = [];
   if (typeof centipawnLoss === 'number' && centipawnLoss > 0) {
@@ -148,15 +146,17 @@ function buildEngineReason({ classification, centipawnLoss, playedMoveDetails })
 
 // Pure facts derived from the BEFORE-FEN. chess.js fields are authoritative
 // ground truth. Engine-shaped fields (eval / bestMove) are populated from
-// stored analysis where available; server-side Stockfish isn't wired up yet,
-// so eval-before/after and best move are intentionally null. centipawnSwing
-// comes from the moves.centipawn_loss column; engineReason is built from
-// that plus classification plus what the played move actually did.
+// the values stored during game analysis. centipawnSwing comes from
+// moves.centipawn_loss; engineReason is built from that plus classification
+// plus what the played move actually did.
 function buildPositionFacts({
   fenBefore,
   playedMoveSan,
   classification = null,
   centipawnLoss = null,
+  bestMove = null,
+  evalBefore = null,
+  evalAfter = null,
 }) {
   let chess;
   try {
@@ -198,21 +198,17 @@ function buildPositionFacts({
     playedMoveNote = `SAN "${playedMoveSan}" is NOT legal in this position. The LLM must not explain this move; ask the player to confirm what was played.`;
   }
 
-  // Engine-shaped fields. evalBefore / evalAfter / bestMove require server-
-  // side Stockfish, which we haven't wired up. centipawnSwing reuses the
-  // already-computed centipawn_loss from the moves row; engineReason
-  // summarises what we DO know without inventing tactical lines.
   const engineFacts = {
-    evalBefore: null,
-    evalAfter: null,
-    centipawnSwing: typeof centipawnLoss === 'number' ? centipawnLoss : null,
-    bestMove: null,
+    evalBefore:           typeof evalBefore === 'number' ? evalBefore : null,
+    evalAfter:            typeof evalAfter  === 'number' ? evalAfter  : null,
+    centipawnSwing:       typeof centipawnLoss === 'number' ? centipawnLoss : null,
+    bestMove:             bestMove ?? null,
     engineReason: buildEngineReason({
       classification,
       centipawnLoss,
       playedMoveDetails,
     }),
-    engineDetailAvailable: false,
+    engineDetailAvailable: bestMove != null,
   };
 
   return {

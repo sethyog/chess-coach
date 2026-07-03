@@ -436,7 +436,8 @@ router.post('/conversation/:moveId', async (req, res) => {
 
   const moveRow = (await query(
     `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
-            m.classification, m.centipawn_loss, m.principle_violated, g.pgn
+            m.classification, m.centipawn_loss, m.principle_violated,
+            m.best_move, m.eval_before, m.eval_after, g.pgn
        FROM moves m
        JOIN games g ON g.id = m.game_id
       WHERE m.id = $1`,
@@ -473,9 +474,12 @@ router.post('/conversation/:moveId', async (req, res) => {
         if (fenBefore) {
           const built = buildPositionFacts({
             fenBefore,
-            playedMoveSan: moveRow.move,
+            playedMoveSan:  moveRow.move,
             classification: moveRow.classification,
-            centipawnLoss: moveRow.centipawn_loss,
+            centipawnLoss:  moveRow.centipawn_loss,
+            bestMove:       moveRow.best_move   ?? null,
+            evalBefore:     moveRow.eval_before ?? null,
+            evalAfter:      moveRow.eval_after  ?? null,
           });
           if (built && built.ok) {
             facts = built;
@@ -690,7 +694,8 @@ router.post('/conversation/:moveId/line', async (req, res) => {
 
   const moveRow = (await query(
     `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
-            m.classification, m.centipawn_loss, m.principle_violated, g.pgn
+            m.classification, m.centipawn_loss, m.principle_violated,
+            m.best_move, m.eval_before, m.eval_after, g.pgn
        FROM moves m
        JOIN games g ON g.id = m.game_id
       WHERE m.id = $1`,
@@ -716,9 +721,12 @@ router.post('/conversation/:moveId/line', async (req, res) => {
         if (fenBefore) {
           const built = buildPositionFacts({
             fenBefore,
-            playedMoveSan: moveRow.move,
+            playedMoveSan:  moveRow.move,
             classification: moveRow.classification,
-            centipawnLoss: moveRow.centipawn_loss,
+            centipawnLoss:  moveRow.centipawn_loss,
+            bestMove:       moveRow.best_move   ?? null,
+            evalBefore:     moveRow.eval_before ?? null,
+            evalAfter:      moveRow.eval_after  ?? null,
           });
           if (built && built.ok) {
             facts = built;

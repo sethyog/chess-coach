@@ -68,13 +68,17 @@ async function analyzeGame(gameId, userId) {
   const { positions, moves } = parsePgn(gameRow.pgn);
 
   // Evaluate every FEN sequentially (engine is single-process; do not parallelize).
-  // evaluateFen() → side-to-move POV; normalize to white POV to match the browser.
-  const evals = new Array(positions.length);
+  // evaluateFen() → side-to-move POV; normalize eval to white POV to match the browser.
+  // bestMove is stored in SAN for the before-position (positions[idx]).
+  const posResults = new Array(positions.length);
   for (let i = 0; i < positions.length; i++) {
     const r = await evaluateFen(positions[i].fen);
     if (!r.ok) throw new Error(`Engine failed at position ${i}: ${r.error}`);
     const sideToMove = positions[i].fen.split(' ')[1]; // 'w' | 'b'
-    evals[i] = sideToMove === 'w' ? r.evalCp : -r.evalCp;
+    posResults[i] = {
+      evalCp:   sideToMove === 'w' ? r.evalCp : -r.evalCp,  // white-POV centipawns
+      bestMove: r.bestMove ?? null,                           // SAN of engine's top move
+    };
   }
 
   // Apply rawLoss formula — identical to GameReview.jsx lines 134–158.
@@ -86,8 +90,8 @@ async function analyzeGame(gameId, userId) {
   const analysed = moves
     .map((m, idx) => {
       const rawLoss = m.color === 'w'
-        ? evals[idx] - evals[idx + 1]
-        : evals[idx + 1] - evals[idx];
+        ? posResults[idx].evalCp - posResults[idx + 1].evalCp
+        : posResults[idx + 1].evalCp - posResults[idx].evalCp;
       const cpLoss = Math.max(0, rawLoss);
       return {
         move_number:       m.moveNumber,
@@ -97,6 +101,9 @@ async function analyzeGame(gameId, userId) {
         classification:    classifyLoss(cpLoss),
         principle_violated: null,
         centipawn_loss:    Math.round(cpLoss),
+        best_move:         posResults[idx].bestMove,
+        eval_before:       posResults[idx].evalCp,
+        eval_after:        posResults[idx + 1].evalCp,
       };
     })
     // Drop opponent moves — identical filter to GameReview.jsx line 151.
@@ -106,10 +113,12 @@ async function analyzeGame(gameId, userId) {
   for (const m of analysed) {
     await query(
       `INSERT INTO moves
-         (game_id, move_number, move, fen, classification, principle_violated, centipawn_loss)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (game_id, move_number, move, fen, classification, principle_violated,
+          centipawn_loss, best_move, eval_before, eval_after)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [gameId, m.move_number, m.move, m.fen,
-       m.classification, m.principle_violated || null, m.centipawn_loss ?? null]
+       m.classification, m.principle_violated || null, m.centipawn_loss ?? null,
+       m.best_move ?? null, m.eval_before ?? null, m.eval_after ?? null]
     );
   }
 
