@@ -16,6 +16,7 @@ export default function Coaching() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendingLine, setSendingLine] = useState(false);
+  const [lineSent, setLineSent] = useState(false);
   const [error, setError] = useState('');
 
   // Change 4: first-coaching-session hint, dismissed via localStorage.
@@ -43,6 +44,7 @@ export default function Coaching() {
       chessRef.current = new Chess(moveContext.fen);
       setComposedFen(moveContext.fen);
       setComposedMoves([]);
+      setLineSent(false);
     }
   }, [moveContext?.fen]);
 
@@ -68,6 +70,7 @@ export default function Coaching() {
       ...prev,
       { san: result.san, from: sourceSquare, to: targetSquare },
     ]);
+    setLineSent(false);
     return true;
   }
 
@@ -80,6 +83,7 @@ export default function Coaching() {
     chessRef.current = chess;
     setComposedMoves(newMoves);
     setComposedFen(chess.fen());
+    setLineSent(false);
   }
 
   function handleReset() {
@@ -87,6 +91,7 @@ export default function Coaching() {
     chessRef.current = new Chess(moveContext.fen);
     setComposedMoves([]);
     setComposedFen(moveContext.fen);
+    setLineSent(false);
   }
 
   async function handleSendLine() {
@@ -124,6 +129,7 @@ export default function Coaching() {
       console.log('[Composer] eval (white POV cp):', cp, '| best move in terminal position:', bestMoveSan ?? bestMoveUci ?? 'none');
       console.log('[Composer] start FEN:', moveContext.fen, '| line:', composedMoves.map(m => m.san).join(' '));
 
+      setLineSent(true);
       // TODO Step 2: compute intent signals and send to coach.
     } catch (err) {
       console.error('[Composer] evaluation error:', err);
@@ -435,9 +441,9 @@ export default function Coaching() {
                     <button
                       className="primary"
                       onClick={handleSendLine}
-                      disabled={composedMoves.length === 0 || sendingLine}
+                      disabled={composedMoves.length === 0 || sendingLine || lineSent}
                     >
-                      {sendingLine ? 'Evaluating…' : 'Send line to coach'}
+                      {sendingLine ? 'Evaluating…' : lineSent ? 'Sent' : 'Send line to coach'}
                     </button>
                   </div>
                 </div>
