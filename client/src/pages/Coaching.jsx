@@ -4,6 +4,8 @@ import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { api } from '../api.js';
 
+const MAX_EXPLORE_PLIES = 6;
+
 export default function Coaching() {
   const { id, moveId } = useParams();
 
@@ -22,6 +24,49 @@ export default function Coaching() {
   function dismissHint() {
     localStorage.setItem('seenCoachingHint', 'true');
     setHintDismissed(true);
+  }
+
+  // ── Sequence composer state ────────────────────────────────────────────────
+  // composedFen tracks the board position as the user builds a line.
+  // Initialized from moveContext.fen when context loads; reset clears it back.
+  const [composedFen, setComposedFen] = useState(null);
+  const [composedMoves, setComposedMoves] = useState([]); // { san, from, to }
+  // chessRef holds the live Chess instance that validates moves against the
+  // current composed position (not the original).
+  const chessRef = useRef(null);
+
+  // Re-initialize the composer whenever the flagged move changes.
+  useEffect(() => {
+    if (moveContext?.fen) {
+      chessRef.current = new Chess(moveContext.fen);
+      setComposedFen(moveContext.fen);
+      setComposedMoves([]);
+    }
+  }, [moveContext?.fen]);
+
+  function handlePieceDrop({ piece, sourceSquare, targetSquare }) {
+    if (!chessRef.current || !targetSquare) return false;
+    if (composedMoves.length >= MAX_EXPLORE_PLIES) return false;
+
+    // Detect pawn promotion: white pawn reaching rank 8, black pawn rank 1.
+    const isPromotion =
+      piece.pieceType === 'wP' && targetSquare[1] === '8' ||
+      piece.pieceType === 'bP' && targetSquare[1] === '1';
+
+    const result = chessRef.current.move({
+      from: sourceSquare,
+      to: targetSquare,
+      promotion: isPromotion ? 'q' : undefined,
+    });
+
+    if (!result) return false; // illegal — snap back
+
+    setComposedFen(chessRef.current.fen());
+    setComposedMoves((prev) => [
+      ...prev,
+      { san: result.san, from: sourceSquare, to: targetSquare },
+    ]);
+    return true;
   }
 
   const logRef = useRef(null);
@@ -163,7 +208,11 @@ export default function Coaching() {
     }
   }
 
-  const boardFen = useMemo(() => moveContext?.fen || 'start', [moveContext]);
+  // Use the composed position when the user is exploring a line.
+  const boardFen = composedFen ?? moveContext?.fen ?? 'start';
+
+  // Only show the flagged-move arrow/highlights on the original position.
+  const isComposing = composedMoves.length > 0;
 
   const moveArrow = useMemo(() => {
     if (!moveContext?.from || !moveContext?.to) return [];
@@ -200,13 +249,15 @@ export default function Coaching() {
                       options={{
                         id: 'coach',
                         position: boardFen,
-                        allowDragging: false,
+                        allowDragging: true,
                         allowDrawingArrows: false,
                         boardOrientation: 'white',
                         darkSquareStyle: { backgroundColor: '#3a3a40' },
                         lightSquareStyle: { backgroundColor: '#b6b6bd' },
-                        arrows: moveArrow,
-                        squareStyles: squareHighlights,
+                        // Hide flagged-move annotations while exploring a line.
+                        arrows: isComposing ? [] : moveArrow,
+                        squareStyles: isComposing ? {} : squareHighlights,
+                        onPieceDrop: handlePieceDrop,
                       }}
                     />
                   </div>
