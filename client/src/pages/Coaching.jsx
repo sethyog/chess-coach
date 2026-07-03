@@ -69,6 +69,33 @@ export default function Coaching() {
     return true;
   }
 
+  function handleUndo() {
+    if (!composedMoves.length || !moveContext?.fen) return;
+    const newMoves = composedMoves.slice(0, -1);
+    // Replay from the origin FEN so chessRef stays in sync.
+    const chess = new Chess(moveContext.fen);
+    newMoves.forEach((m) => chess.move(m.san));
+    chessRef.current = chess;
+    setComposedMoves(newMoves);
+    setComposedFen(chess.fen());
+  }
+
+  function handleReset() {
+    if (!moveContext?.fen) return;
+    chessRef.current = new Chess(moveContext.fen);
+    setComposedMoves([]);
+    setComposedFen(moveContext.fen);
+  }
+
+  function handleSendLine() {
+    // TODO: wire coach integration here — pass { startFen, moves } to the
+    // coaching API so the coach can reference the explored line in its reply.
+    console.log('[Composer] Send line to coach:', {
+      startFen: moveContext?.fen,
+      moves: composedMoves,
+    });
+  }
+
   const logRef = useRef(null);
 
   useEffect(() => {
@@ -350,6 +377,32 @@ export default function Coaching() {
                       )}
                     </>
                   )}
+                  <div style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    marginTop: 12,
+                  }}>
+                    <button
+                      onClick={handleUndo}
+                      disabled={composedMoves.length === 0}
+                    >
+                      Undo
+                    </button>
+                    <button
+                      onClick={handleReset}
+                      disabled={composedMoves.length === 0}
+                    >
+                      Reset
+                    </button>
+                    <button
+                      className="primary"
+                      onClick={handleSendLine}
+                      disabled={composedMoves.length === 0}
+                    >
+                      Send line to coach
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
