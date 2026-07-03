@@ -225,6 +225,27 @@ export default function Coaching() {
     return { [moveContext.from]: tint, [moveContext.to]: tint };
   }, [moveContext]);
 
+  // Format composedMoves into chess-notation tokens: [{ type:'num', text },
+  // { type:'move', san }]. Derives starting move number and side from the FEN.
+  const composedLineTokens = useMemo(() => {
+    if (!composedMoves.length || !moveContext?.fen) return [];
+    const parts = moveContext.fen.split(' ');
+    let turn = parts[1] || 'w';
+    let moveNum = parseInt(parts[5], 10) || 1;
+    const tokens = [];
+    composedMoves.forEach((m, i) => {
+      if (turn === 'w') {
+        tokens.push({ type: 'num', text: `${moveNum}.` });
+      } else if (i === 0) {
+        tokens.push({ type: 'num', text: `${moveNum}...` });
+      }
+      tokens.push({ type: 'move', san: m.san });
+      if (turn === 'b') moveNum++;
+      turn = turn === 'w' ? 'b' : 'w';
+    });
+    return tokens;
+  }, [composedMoves, moveContext?.fen]);
+
   return (
     <>
       <div className="crumb">
@@ -279,6 +300,57 @@ export default function Coaching() {
                     </>
                   )}
                 </dl>
+
+                {/* ── Sequence composer ──────────────────────────── */}
+                <div style={{
+                  marginTop: 14,
+                  paddingTop: 14,
+                  borderTop: '1px solid var(--border)',
+                }}>
+                  <div style={{
+                    fontSize: 11,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.06em',
+                    color: 'var(--text-dim)',
+                    marginBottom: 8,
+                  }}>
+                    Explored line
+                  </div>
+                  {composedMoves.length === 0 ? (
+                    <p style={{ margin: 0, color: 'var(--text-dim)', fontSize: 13 }}>
+                      Drag pieces to explore a line.
+                    </p>
+                  ) : (
+                    <>
+                      <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '2px 6px',
+                        alignItems: 'baseline',
+                        fontFamily: "'Courier New', monospace",
+                        fontSize: 14,
+                        lineHeight: 1.8,
+                      }}>
+                        {composedLineTokens.map((tok, i) =>
+                          tok.type === 'num' ? (
+                            <span key={i} style={{ color: 'var(--text-dim)', fontSize: 12 }}>
+                              {tok.text}
+                            </span>
+                          ) : (
+                            <span key={i} style={{ color: 'var(--text)' }}>
+                              {tok.san}
+                            </span>
+                          )
+                        )}
+                      </div>
+                      {composedMoves.length >= MAX_EXPLORE_PLIES && (
+                        <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text-dim)' }}>
+                          Max line length reached
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
               </>
             ) : (
               <div className="empty">No move context.</div>
