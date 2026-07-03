@@ -2,7 +2,7 @@
 
 // Clear all per-move Stockfish analysis so games can be re-analysed.
 // Deletes: coaching_facts, conversations, moves (in dependency order).
-// Games are preserved; analyzeGame() will re-run on next coaching request.
+// Games are preserved. Run reanalyze-all-games.js next to repopulate moves.
 //
 // Run with:  DATABASE_URL=<railway_url> node server/scripts/clear-move-analysis.js
 
