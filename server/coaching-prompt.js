@@ -109,7 +109,7 @@ function fmtEvalCp(cp) {
 // block as the sole source of board truth.
 // engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
 // includeLineDemos: true when the current turn is a line submission (enables demo instructions).
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [] }) {
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [], userNote = null }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -133,6 +133,13 @@ function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTu
     ? '1 exchange remaining'
     : `${maxTurns - currentTurn} exchanges remaining`;
 
+  // When the student attaches a note, it is ground truth about their THINKING —
+  // not about the position. Build a section that instructs the coach to compare
+  // the stated intent against the engine-verified facts and teach the gap.
+  const intentSection = userNote
+    ? `\nSTUDENT'S STATED INTENT:\n"${userNote}"\n\nThis is the student's stated reasoning — ground truth about their THINKING, not about the board. The VERIFIED FACTS above are ground truth about the POSITION.\n\nYour primary coaching task this turn: compare the stated intent against the engine-verified reality.\n - If the stated intent MATCHES what the engine shows: affirm the insight and deepen it — explain WHY it works, not just that it does.\n - If the stated intent DOES NOT MATCH: this is the golden coaching moment. Identify the specific gap between what the student thought would happen and what the engine shows actually happens. Teach that gap directly. Do not just say "that's wrong" — name the specific misconception (e.g. "The idea was right — you spotted the queen looked vulnerable. But after your line the queen slides to e6 and escapes. The calculation missed that one escape square."). Coach the misconception, not just the move.\n - Never treat the stated intent as ground truth about the position.\n - The Socratic ladder still applies: probe first, give the direct answer at Rung 4. A stated intent is not a shortcut around the ladder.`
+    : '';
+
   return `${formatProfileForPrompt(profile)}
 
 You are a Socratic chess coach. You are given VERIFIED FACTS about the position, computed by chess.js and (where noted) a chess engine. These are the ONLY source of truth about the board.
@@ -150,7 +157,7 @@ ${indentedPieceMap}
  - Engine's principal variation from the before-position (verified by chess.js, up to 4 plies): ${enginePv.length ? enginePv.join(', ') : 'not available'}
  - Why it was a mistake (engine-derived summary): ${facts.engine.engineReason}
  - Principle violated: ${principleViolated || 'none identified yet'}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
-
+${intentSection}
 STRICT RULES:
  - Treat the verified facts as absolute truth; never contradict them.
  - Never state a piece is on a square unless the piece map says so.

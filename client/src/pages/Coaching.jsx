@@ -20,6 +20,7 @@ export default function Coaching() {
   const [sending, setSending] = useState(false);
   const [sendingLine, setSendingLine] = useState(false);
   const [lineSent, setLineSent] = useState(false);
+  const [lineNote, setLineNote] = useState('');
   const [error, setError] = useState('');
 
   const [hintDismissed, setHintDismissed] = useState(
@@ -111,6 +112,7 @@ export default function Coaching() {
       setComposedFen(anchor);
       setComposedMoves([]);
       setLineSent(false);
+      setLineNote('');
       handleBackToPosition();
     }
   // moveContext.fen uniquely identifies the move; fenBefore is derived from the same move.
@@ -168,6 +170,7 @@ export default function Coaching() {
     setComposedMoves([]);
     setComposedFen(anchor);
     setLineSent(false);
+    setLineNote('');
   }
 
   async function handleSendLine() {
@@ -176,6 +179,7 @@ export default function Coaching() {
     setError('');
 
     const startFen = moveContext.fenBefore ?? moveContext.fen;
+    const noteText = lineNote.trim();
 
     try {
       // Reach the terminal position from the before-position anchor.
@@ -200,7 +204,10 @@ export default function Coaching() {
         role: 'user',
         message_type: 'user_moves',
         content: sanLine,
-        move_data: { moves: composedMoves, startFen, terminalFen, terminalEvalCp: cp },
+        move_data: {
+          moves: composedMoves, startFen, terminalFen, terminalEvalCp: cp,
+          ...(noteText ? { userNote: noteText } : {}),
+        },
       };
       setMessages(prev => [...prev, optimisticUserMsg]);
 
@@ -210,6 +217,7 @@ export default function Coaching() {
         startFen,
         terminalFen,
         terminalEvalCp: cp,
+        ...(noteText ? { userNote: noteText } : {}),
       });
 
       // data = { text, demonstrations: [{from, moves, startFen}] }
@@ -223,6 +231,7 @@ export default function Coaching() {
       setMessages(prev => [...prev, coachMsg]);
 
       setLineSent(true);
+      if (noteText) setLineNote('');
 
       // Start animation after coach text appears.
       if (data.demonstrations && data.demonstrations.length > 0) {
@@ -409,6 +418,7 @@ export default function Coaching() {
 
     if (m.role === 'user' && m.message_type === 'user_moves') {
       const movesList = m.move_data?.moves?.map(mv => mv.san).join(' ') || m.content;
+      const note = m.move_data?.userNote;
       const demos = m.move_data
         ? [{ from: 'original', moves: m.move_data.moves?.map(mv => mv.san) || [], startFen: m.move_data.startFen }]
         : [];
@@ -418,6 +428,11 @@ export default function Coaching() {
           <span style={{ fontFamily: "'Courier New', monospace", fontSize: 13 }}>
             Explored: {movesList}
           </span>
+          {note && (
+            <span style={{ fontSize: 13, fontStyle: 'italic', color: 'var(--text-dim)' }}>
+              &ldquo;{note}&rdquo;
+            </span>
+          )}
           {demos[0]?.startFen && demos[0]?.moves?.length > 0 && (
             <button
               onClick={() => animateDemos(demos)}
@@ -577,6 +592,27 @@ export default function Coaching() {
                           Max line length reached
                         </p>
                       )}
+                      <textarea
+                        placeholder="Add a note about your idea (optional)"
+                        value={lineNote}
+                        onChange={(e) => setLineNote(e.target.value)}
+                        disabled={sendingLine}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          marginTop: 10,
+                          padding: '6px 8px',
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--text)',
+                          borderRadius: 4,
+                          fontSize: 13,
+                          resize: 'vertical',
+                          minHeight: 52,
+                          boxSizing: 'border-box',
+                          fontFamily: 'inherit',
+                        }}
+                      />
                     </>
                   )}
                   <div style={{

@@ -675,22 +675,28 @@ router.post('/conversation/:moveId/line', async (req, res) => {
     return res.status(404).json({ error: 'Move not found' });
   }
 
-  const { moves, startFen, terminalFen, terminalEvalCp } = req.body || {};
+  const { moves, startFen, terminalFen, terminalEvalCp, userNote } = req.body || {};
   if (!Array.isArray(moves) || moves.length === 0 || !startFen || !terminalFen) {
     return res.status(400).json({ error: 'moves, startFen, and terminalFen are required' });
   }
 
   // Build a readable, plain-text description of the submitted line for LLM history.
+  // When the student attaches a note, include it so that the LLM history captures
+  // the stated intent alongside the engine-verified line description.
   const sanList = moves.map(m => m.san).join(' ');
   const evalDesc = cpToPlainLanguage(terminalEvalCp);
+  const trimmedNote = (typeof userNote === 'string' ? userNote.trim() : '') || null;
+  const noteClause = trimmedNote ? ` Student's stated intent: "${trimmedNote}".` : '';
   const userContent =
     `Student submitted a line for board review: ${sanList} (${moves.length} move${moves.length !== 1 ? 's' : ''} from the flagged position). ` +
-    `Engine evaluation of the terminal position: ${evalDesc}.`;
+    `Engine evaluation of the terminal position: ${evalDesc}.${noteClause}`;
 
   // Store the user_moves row before calling Claude so history includes it.
+  // userNote is stored in move_data so the client can display it on reload.
+  const moveDataToStore = { moves, startFen, terminalFen, terminalEvalCp, ...(trimmedNote ? { userNote: trimmedNote } : {}) };
   await query(
     "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'user_moves', $4)",
-    [moveId, 'user', userContent, JSON.stringify({ moves, startFen, terminalFen, terminalEvalCp })]
+    [moveId, 'user', userContent, JSON.stringify(moveDataToStore)]
   );
 
   const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [req.user.id])).rows[0];
@@ -703,7 +709,9 @@ router.post('/conversation/:moveId/line', async (req, res) => {
   const currentTurn = history.filter(h => h.role === 'assistant').length + 1;
   const level = profile?.computed_level || 'intermediate';
   const maxTurns = MAX_TURNS_BY_LEVEL[level] ?? DEFAULT_MAX_TURNS;
-  const forceAnswer = false; // line submissions are never "give up" signals
+  // A note containing give-up phrases ("just tell me", etc.) is treated the same
+  // as typing that phrase in chat — it triggers the escalation-ladder bailout.
+  const forceAnswer = trimmedNote ? detectForceAnswer(trimmedNote) : false;
 
   const moveRow = (await query(
     `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
@@ -780,6 +788,7 @@ router.post('/conversation/:moveId/line', async (req, res) => {
         engineLevel: ENGINE_CONSULTATION_LEVEL,
         includeLineDemos: true,
         enginePv,
+        userNote: trimmedNote,
       })
     : buildDegradedPrompt({
         profile,
