@@ -6,18 +6,22 @@ const MAX_LEGAL_MOVES_LISTED = 40;
 
 // Appended to every coaching system prompt — tells the coach how to format its response
 // and when/how to include board demonstrations.
-function buildResponseFormatSection(includeLineDemos) {
-  const demoRules = includeLineDemos
+function buildResponseFormatSection(lineContextAvailable) {
+  const demoRules = lineContextAvailable
     ? `
-When the student has submitted a line for board review:
- - Consider including demonstrations to make the teaching concrete.
- - "userLine" demo: play from the END of the student's submitted line to show the FLAW — "watch what happens after your moves..."
- - "original" demo: play from the FLAGGED POSITION to show the BETTER IDEA — "from the start, here's what works..."
- - The ideal "flaw then fix" pattern: include a "userLine" demo first, then an "original" demo.
+Demonstrations are available this turn:
+ - "original" demo: play from the FLAGGED POSITION to show a better move or key idea from the start.
+ - "userLine" demo: play from the END of the student's submitted line to show the FLAW after their moves.
+ - The ideal "flaw then fix" pattern: "userLine" demo first (showing what goes wrong), then "original" demo (showing the better idea).
  - Limit each demonstration to 3-5 moves; only include moves that illustrate the teaching point.
- - Move quality claims in your text must reference the verified facts or engine eval already given to you — never assert quality from your own judgment.`
+ - Move quality claims must reference verified facts or engine eval — never assert quality from your own judgment.`
     : `
- - For this text Q&A exchange, set demonstrations to an empty array.`;
+Demonstrations are available this turn:
+ - "original" demo: play from the FLAGGED POSITION to show a move sequence on the board (e.g. the engine's best move and a reply).
+ - Do NOT use "userLine" — the student has not submitted a line this turn.
+ - Use demonstrations when showing moves concretely adds teaching value (e.g. the student asks to see a line, or Rung 4 warrants it).
+ - Limit each demonstration to 3-5 moves.
+ - Move quality claims must reference verified facts — never assert quality from your own judgment.`;
 
   return `
 RESPONSE FORMAT (MANDATORY):
