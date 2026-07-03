@@ -9,17 +9,17 @@ const MAX_LEGAL_MOVES_LISTED = 40;
 function buildResponseFormatSection(lineContextAvailable) {
   const demoRules = lineContextAvailable
     ? `
-Demonstrations are available this turn:
- - "original" demo: play from the FLAGGED POSITION to show a better move or key idea from the start.
- - "userLine" demo: play from the END of the student's submitted line to show the FLAW after their moves.
- - The ideal "flaw then fix" pattern: "userLine" demo first (showing what goes wrong), then "original" demo (showing the better idea).
+Demonstrations available this turn:
+ - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show the better alternative — "from where you had the choice, Qd8+ wins."
+ - "userLine": play from the END of the student's submitted line. Use this to show the flaw — "watch what happens after your moves."
+ - Ideal "flaw then fix": "userLine" demo first (exposing the problem), then "original" demo (showing the better idea from the choice point).
  - Limit each demonstration to 3-5 moves; only include moves that illustrate the teaching point.
  - Move quality claims must reference verified facts or engine eval — never assert quality from your own judgment.`
     : `
-Demonstrations are available this turn:
- - "original" demo: play from the FLAGGED POSITION to show a move sequence on the board (e.g. the engine's best move and a reply).
+Demonstrations available this turn:
+ - "original": play from the POSITION BEFORE THE FLAGGED MOVE (where the student made their choice). Use this to show move sequences on the board — e.g. the engine's recommended move and a reply, or the student's actual move followed by why it fails.
  - Do NOT use "userLine" — the student has not submitted a line this turn.
- - Use demonstrations when showing moves concretely adds teaching value (e.g. the student asks to see a line, or Rung 4 warrants it).
+ - Use demonstrations when showing moves concretely adds teaching value (student asks to see a line, Rung 4 answer, or a key tactical point).
  - Limit each demonstration to 3-5 moves.
  - Move quality claims must reference verified facts — never assert quality from your own judgment.`;
 

@@ -102,14 +102,18 @@ export default function Coaching() {
   }
 
   // Re-initialize the composer whenever the flagged move changes.
+  // Anchor to the BEFORE position so the composer and all demonstrations
+  // share a single unambiguous starting point.
   useEffect(() => {
-    if (moveContext?.fen) {
-      chessRef.current = new Chess(moveContext.fen);
-      setComposedFen(moveContext.fen);
+    if (moveContext) {
+      const anchor = moveContext.fenBefore ?? moveContext.fen;
+      chessRef.current = new Chess(anchor);
+      setComposedFen(anchor);
       setComposedMoves([]);
       setLineSent(false);
       handleBackToPosition();
     }
+  // moveContext.fen uniquely identifies the move; fenBefore is derived from the same move.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moveContext?.fen]);
 
@@ -144,10 +148,11 @@ export default function Coaching() {
   }
 
   function handleUndo() {
-    if (!composedMoves.length || !moveContext?.fen) return;
+    if (!composedMoves.length || !moveContext) return;
     cancelDemoIfActive();
+    const anchor = moveContext.fenBefore ?? moveContext.fen;
     const newMoves = composedMoves.slice(0, -1);
-    const chess = new Chess(moveContext.fen);
+    const chess = new Chess(anchor);
     newMoves.forEach((m) => chess.move(m.san));
     chessRef.current = chess;
     setComposedMoves(newMoves);
@@ -156,22 +161,25 @@ export default function Coaching() {
   }
 
   function handleReset() {
-    if (!moveContext?.fen) return;
+    if (!moveContext) return;
     cancelDemoIfActive();
-    chessRef.current = new Chess(moveContext.fen);
+    const anchor = moveContext.fenBefore ?? moveContext.fen;
+    chessRef.current = new Chess(anchor);
     setComposedMoves([]);
-    setComposedFen(moveContext.fen);
+    setComposedFen(anchor);
     setLineSent(false);
   }
 
   async function handleSendLine() {
-    if (!moveContext?.fen || composedMoves.length === 0 || sendingLine) return;
+    if (!moveContext || composedMoves.length === 0 || sendingLine) return;
     setSendingLine(true);
     setError('');
 
+    const startFen = moveContext.fenBefore ?? moveContext.fen;
+
     try {
-      // Reach the terminal position.
-      const chess = new Chess(moveContext.fen);
+      // Reach the terminal position from the before-position anchor.
+      const chess = new Chess(startFen);
       for (const m of composedMoves) {
         chess.move(m.san);
       }
@@ -179,11 +187,11 @@ export default function Coaching() {
 
       // Evaluate the terminal position client-side (engine does truth).
       const worker = await getStockfish();
-      const { cp, bestMove: bestMoveUci } = await evaluatePositionFull(worker, terminalFen);
+      const { cp } = await evaluatePositionFull(worker, terminalFen);
 
-      console.log('[Composer] terminal FEN:', terminalFen);
-      console.log('[Composer] eval (white POV cp):', cp);
-      console.log('[Composer] start FEN:', moveContext.fen, '| line:', composedMoves.map(m => m.san).join(' '));
+      console.log('[Composer] startFen (before):', startFen);
+      console.log('[Composer] terminalFen:', terminalFen);
+      console.log('[Composer] eval (white POV cp):', cp, '| line:', composedMoves.map(m => m.san).join(' '));
 
       // Show the submitted line as a user message optimistically.
       const sanLine = composedMoves.map(m => m.san).join(' ');
@@ -192,14 +200,14 @@ export default function Coaching() {
         role: 'user',
         message_type: 'user_moves',
         content: sanLine,
-        move_data: { moves: composedMoves, startFen: moveContext.fen, terminalFen, terminalEvalCp: cp },
+        move_data: { moves: composedMoves, startFen, terminalFen, terminalEvalCp: cp },
       };
       setMessages(prev => [...prev, optimisticUserMsg]);
 
-      // Send to coach.
+      // Send to coach — startFen is the before-position, consistent with 'original' demos.
       const { data } = await api.post(`/coach/conversation/${moveId}/line`, {
         moves: composedMoves,
-        startFen: moveContext.fen,
+        startFen,
         terminalFen,
         terminalEvalCp: cp,
       });
@@ -286,7 +294,8 @@ export default function Coaching() {
           setMoveContext({
             move: move.move,
             classification: move.classification,
-            fen: move.fen,
+            fen: move.fen,           // after-position (reference only)
+            fenBefore: move.fen_before ?? null, // before-position (canonical anchor)
             principle_violated: move.principle_violated,
             from: fromSquare,
             to: toSquare,
@@ -357,8 +366,8 @@ export default function Coaching() {
     }
   }
 
-  // Effective board FEN: demo overrides composer, which overrides flagged position.
-  const boardFen = demoBoard ?? composedFen ?? moveContext?.fen ?? 'start';
+  // Effective board FEN: demo overrides composer, which overrides the before-position anchor.
+  const boardFen = demoBoard ?? composedFen ?? moveContext?.fenBefore ?? moveContext?.fen ?? 'start';
 
   const isComposing = composedMoves.length > 0;
   const inDemoMode = demoBoard !== null;
@@ -375,8 +384,9 @@ export default function Coaching() {
   }, [moveContext]);
 
   const composedLineTokens = useMemo(() => {
-    if (!composedMoves.length || !moveContext?.fen) return [];
-    const parts = moveContext.fen.split(' ');
+    const anchorFen = moveContext?.fenBefore ?? moveContext?.fen;
+    if (!composedMoves.length || !anchorFen) return [];
+    const parts = anchorFen.split(' ');
     let turn = parts[1] || 'w';
     let moveNum = parseInt(parts[5], 10) || 1;
     const tokens = [];
@@ -391,7 +401,7 @@ export default function Coaching() {
       turn = turn === 'w' ? 'b' : 'w';
     });
     return tokens;
-  }, [composedMoves, moveContext?.fen]);
+  }, [composedMoves, moveContext?.fenBefore, moveContext?.fen]);
 
   // Render a single message based on its type.
   function renderMessage(m) {

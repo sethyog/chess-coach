@@ -385,7 +385,33 @@ router.get('/:id', async (req, res) => {
     'SELECT * FROM moves WHERE game_id = $1 ORDER BY move_number',
     [req.params.id]
   )).rows;
-  res.json({ ...game, moves });
+
+  // Attach fen_before (position where the player made the choice) to each move
+  // by replaying the PGN once. This gives the client the canonical anchor for
+  // coaching demonstrations and the composer board.
+  let fenBeforeByFen = new Map(); // after-FEN → before-FEN
+  if (game.pgn) {
+    try {
+      const chess = new Chess();
+      const pgnChess = new Chess();
+      pgnChess.loadPgn(game.pgn);
+      const sans = pgnChess.history();
+      for (const san of sans) {
+        const before = chess.fen();
+        chess.move(san);
+        fenBeforeByFen.set(chess.fen(), before);
+      }
+    } catch (err) {
+      console.warn(`[games] Could not build fen_before map for game ${game.id}:`, err.message);
+    }
+  }
+
+  const movesWithBefore = moves.map(m => ({
+    ...m,
+    fen_before: fenBeforeByFen.get(m.fen) ?? null,
+  }));
+
+  res.json({ ...game, moves: movesWithBefore });
 });
 
 // Save analysed moves for a game.

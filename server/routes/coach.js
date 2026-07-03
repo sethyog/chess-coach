@@ -443,6 +443,17 @@ router.post('/conversation/:moveId', async (req, res) => {
     [moveId]
   )).rows[0];
 
+  // Compute the before-position FEN (where the player made their choice).
+  // 'original' demonstrations must start here, not from the after-position stored in moves.fen.
+  let fenBefore = null;
+  try {
+    if (moveRow?.pgn) {
+      fenBefore = reconstructBeforeFen(moveRow.pgn, moveRow.move_number, moveRow.move);
+    }
+  } catch (err) {
+    console.warn(`[coach] Could not reconstruct fenBefore for move ${moveId}:`, err.message);
+  }
+
   // Build (or read cached) verified facts.
   let facts = null;
   const cachedRow = (await query('SELECT facts FROM coaching_facts WHERE move_id = $1', [moveId])).rows[0];
@@ -602,8 +613,8 @@ router.post('/conversation/:moveId', async (req, res) => {
     const structured = extractStructuredResponse(reply);
     const resolvedDemos = validateAndResolveDemonstrations(
       structured.demonstrations,
-      moveRow?.fen,   // flagged position (original)
-      null            // no terminalFen for text-only turns
+      fenBefore ?? moveRow?.fen,  // before-position where the choice was made
+      null                        // no terminalFen for text-only turns
     );
     const moveData = resolvedDemos.length > 0 ? { demonstrations: resolvedDemos } : null;
 
