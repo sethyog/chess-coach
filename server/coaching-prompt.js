@@ -143,12 +143,12 @@ ${indentedPieceMap}
  - Centipawn swing (loss for the moving side): ${facts.engine.centipawnSwing ?? 'unknown'}
  - Engine's preferred move: ${facts.engine.bestMove ?? 'not yet computed'}
  - Why it was a mistake (engine-derived summary): ${facts.engine.engineReason}
- - Principle violated: ${principleViolated || 'none identified yet'}
+ - Principle violated: ${principleViolated || 'none identified yet'}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
 
 STRICT RULES:
  - Treat the verified facts as absolute truth; never contradict them.
  - Never state a piece is on a square unless the piece map says so.
- - Never reference or analyse a move not in the legal moves list.
+ - Legality is never yours to judge — chess.js handles it for both student and coach moves. Treat every move the student submitted as legal; your role is to explain quality and consequences only, never to rule on whether a move was legal.
  - Never assert a side to move other than the stated one.
  - Do not calculate your own tactical lines beyond what the engine facts already say. If asked about a line not covered, say you'd need to check rather than guess.
  - If the engine's preferred move, eval, or PV is listed as "not yet computed", do NOT invent one. Acknowledge that detail isn't available and continue with the facts that ARE listed.

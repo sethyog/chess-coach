@@ -1,0 +1,73 @@
+BUG: Coach disputes legality of chess.js-validated moves in submitted lines
+===========================================================================
+
+Symptom
+-------
+User plays a legal move on the interactive board (e.g. Ra2 — rook down an open
+a-file). chess.js accepts it; it appears in the explored line. The coach then
+tells the user "Ra2 isn't legal here," contradicting the validated move.
+
+This violates the verified-facts architecture: legality is deterministic
+(chess.js), the coach must never assess it from its own reasoning.
+
+
+Root cause — two compounding problems
+--------------------------------------
+
+1. Submitted line moves have no legality stamp in the system prompt
+
+   The VERIFIED FACTS block describes only the flagged move: fenBefore,
+   legalMoves from that before-position, and playedMoveSan. When a line is
+   submitted, its moves are injected as plain conversation text
+   (coach.js:674):
+
+     "Student submitted a line for board review: 18...Ra2 ..."
+
+   Nothing in the system prompt tells the coach those moves were
+   chess.js-validated. They read as a claim the user is making, not a
+   verified fact — leaving the coach free to assess them itself.
+
+2. A strict rule backfires on the line path
+
+   coaching-prompt.js:151 says:
+
+     "Never reference or analyse a move not in the legal moves list."
+
+   The legalMoves in the facts is the set of single moves available from
+   the flagged before-position — not the moves in the submitted line.
+   Ra2 may be absent from that list (it's a later move in the sequence).
+   The coach reads its own rule, sees Ra2 isn't in legalMoves, and
+   concludes it must dispute it — the exact opposite of the rule's intent.
+
+
+Where the coach gets licence to make a legality claim
+------------------------------------------------------
+  - Line moves are absent from any verified-facts block entirely.
+  - The one legality-related strict rule inadvertently applies to the
+    wrong move list (before-position legal moves, not line moves).
+  - No explicit instruction exists that submitted line moves are
+    pre-validated and their legality is not up for discussion.
+
+
+Files involved
+--------------
+  server/routes/coach.js:674        — line moves injected as plain text
+  server/coaching-prompt.js:135-146 — VERIFIED FACTS block (flagged move only)
+  server/coaching-prompt.js:151     — strict rule that backfires
+  server/position-facts.js:172-199  — playedMoveNote only set for flagged move
+
+
+Fix (not yet applied)
+---------------------
+Two targeted prompt changes in buildVerifiedFactsPrompt() when
+includeLineDemos is true:
+
+1. Add to VERIFIED FACTS:
+   "The moves in the student's submitted line were each validated by
+   chess.js before being sent — treat them as legal."
+
+2. Tighten the strict rule so it governs only coach-asserted moves, not
+   student-submitted ones:
+   "Never assert that a piece is on a square or that a move is
+   legal/illegal based on your own reasoning — use only the verified
+   facts and treat any student-submitted line as chess.js-validated."
