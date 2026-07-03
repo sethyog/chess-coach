@@ -70,6 +70,48 @@ export function evaluatePosition(worker, fen, depth = 12) {
   });
 }
 
+// Like evaluatePosition but also returns the engine's best move in UCI notation.
+// Returns { cp: number, bestMove: string | null }.
+export function evaluatePositionFull(worker, fen, depth = 12) {
+  return new Promise((resolve) => {
+    let lastCp = 0;
+    let bestMoveUci = null;
+    let whiteToMove = fen.split(' ')[1] === 'w';
+
+    function onMessage(e) {
+      const line = String(e.data ?? '');
+
+      if (line.startsWith('info ') && line.includes(' score ')) {
+        const mate = line.match(/ score mate (-?\d+)/);
+        const cp = line.match(/ score cp (-?\d+)/);
+
+        let stmScore;
+        if (mate) {
+          const m = parseInt(mate[1], 10);
+          stmScore = m > 0 ? 10000 - m : -10000 - m;
+        } else if (cp) {
+          stmScore = parseInt(cp[1], 10);
+        } else {
+          return;
+        }
+
+        lastCp = whiteToMove ? stmScore : -stmScore;
+      } else if (line.startsWith('bestmove')) {
+        const parts = line.split(' ');
+        const uci = parts[1];
+        bestMoveUci = uci && uci !== '(none)' ? uci : null;
+        worker.removeEventListener('message', onMessage);
+        resolve({ cp: lastCp, bestMove: bestMoveUci });
+      }
+    }
+
+    worker.addEventListener('message', onMessage);
+    worker.postMessage('ucinewgame');
+    worker.postMessage('position fen ' + fen);
+    worker.postMessage('go depth ' + depth);
+  });
+}
+
 export function classifyLoss(cpLoss) {
   if (cpLoss > 200) return 'blunder';
   if (cpLoss >= 100) return 'mistake';

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
 import { api } from '../api.js';
+import { getStockfish, evaluatePositionFull } from '../stockfish.js';
 
 const MAX_EXPLORE_PLIES = 6;
 
@@ -14,6 +15,7 @@ export default function Coaching() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendingLine, setSendingLine] = useState(false);
   const [error, setError] = useState('');
 
   // Change 4: first-coaching-session hint, dismissed via localStorage.
@@ -87,13 +89,48 @@ export default function Coaching() {
     setComposedFen(moveContext.fen);
   }
 
-  function handleSendLine() {
-    // TODO: wire coach integration here — pass { startFen, moves } to the
-    // coaching API so the coach can reference the explored line in its reply.
-    console.log('[Composer] Send line to coach:', {
-      startFen: moveContext?.fen,
-      moves: composedMoves,
-    });
+  async function handleSendLine() {
+    if (!moveContext?.fen || composedMoves.length === 0 || sendingLine) return;
+    setSendingLine(true);
+    setError('');
+
+    try {
+      // Replay all composed moves from the start FEN to reach the terminal position.
+      const chess = new Chess(moveContext.fen);
+      for (const m of composedMoves) {
+        chess.move(m.san);
+      }
+      const terminalFen = chess.fen();
+
+      // Evaluate ONLY the terminal position — never per-move.
+      const worker = await getStockfish();
+      const { cp, bestMove: bestMoveUci } = await evaluatePositionFull(worker, terminalFen);
+
+      // Convert engine's best-move from UCI to SAN for readability.
+      let bestMoveSan = null;
+      if (bestMoveUci) {
+        try {
+          const evalChess = new Chess(terminalFen);
+          const result = evalChess.move({
+            from: bestMoveUci.slice(0, 2),
+            to: bestMoveUci.slice(2, 4),
+            promotion: bestMoveUci.length === 5 ? bestMoveUci[4] : undefined,
+          });
+          bestMoveSan = result?.san ?? null;
+        } catch (_) {}
+      }
+
+      console.log('[Composer] terminal FEN:', terminalFen);
+      console.log('[Composer] eval (white POV cp):', cp, '| best move in terminal position:', bestMoveSan ?? bestMoveUci ?? 'none');
+      console.log('[Composer] start FEN:', moveContext.fen, '| line:', composedMoves.map(m => m.san).join(' '));
+
+      // TODO Step 2: compute intent signals and send to coach.
+    } catch (err) {
+      console.error('[Composer] evaluation error:', err);
+      setError('Engine evaluation failed — try again.');
+    } finally {
+      setSendingLine(false);
+    }
   }
 
   const logRef = useRef(null);
@@ -398,9 +435,9 @@ export default function Coaching() {
                     <button
                       className="primary"
                       onClick={handleSendLine}
-                      disabled={composedMoves.length === 0}
+                      disabled={composedMoves.length === 0 || sendingLine}
                     >
-                      Send line to coach
+                      {sendingLine ? 'Evaluating…' : 'Send line to coach'}
                     </button>
                   </div>
                 </div>
