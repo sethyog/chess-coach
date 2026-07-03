@@ -203,6 +203,15 @@ async function initDb() {
       )
     `);
 
+    if (!await columnExists(client, 'conversations', 'message_type')) {
+      await client.query("ALTER TABLE conversations ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'");
+      console.log("Migration: added conversations.message_type");
+    }
+    if (!await columnExists(client, 'conversations', 'move_data')) {
+      await client.query('ALTER TABLE conversations ADD COLUMN move_data JSONB');
+      console.log('Migration: added conversations.move_data');
+    }
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS player_profile (
         id SERIAL PRIMARY KEY,

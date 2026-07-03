@@ -2,6 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { Chess } = require('chess.js');
 const { query } = require('../db');
 const { logCandidate } = require('../principle-candidates');
 const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
@@ -59,6 +60,107 @@ const GIVE_UP_PHRASES = [
 function detectForceAnswer(message) {
   const lower = message.toLowerCase();
   return GIVE_UP_PHRASES.some(phrase => lower.includes(phrase));
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Structured response helpers ───────────────────────────────────────────────
+
+// Parse the coach's JSON response. Falls back to { text: rawText, demonstrations: [] }
+// if the response is not valid JSON or is missing the expected shape.
+function extractStructuredResponse(rawText) {
+  const text = (rawText || '').trim();
+
+  // Try pure JSON first.
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.text === 'string') {
+      return { text: parsed.text, demonstrations: Array.isArray(parsed.demonstrations) ? parsed.demonstrations : [] };
+    }
+  } catch (_) {}
+
+  // Try extracting from a code fence.
+  const codeMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (codeMatch) {
+    try {
+      const parsed = JSON.parse(codeMatch[1]);
+      if (parsed && typeof parsed.text === 'string') {
+        return { text: parsed.text, demonstrations: Array.isArray(parsed.demonstrations) ? parsed.demonstrations : [] };
+      }
+    } catch (_) {}
+  }
+
+  // Try finding a bare JSON object containing a "text" key.
+  const jsonStart = text.indexOf('{');
+  if (jsonStart !== -1) {
+    const jsonEnd = text.lastIndexOf('}');
+    if (jsonEnd > jsonStart) {
+      try {
+        const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1));
+        if (parsed && typeof parsed.text === 'string') {
+          return { text: parsed.text, demonstrations: Array.isArray(parsed.demonstrations) ? parsed.demonstrations : [] };
+        }
+      } catch (_) {}
+    }
+  }
+
+  return { text, demonstrations: [] };
+}
+
+// Validate each demonstration's moves with chess.js from the resolved start FEN.
+// Illegal moves cause that demo to be dropped (logged, never animated).
+// Returns an array of { from, moves, startFen } with concrete startFens.
+function validateAndResolveDemonstrations(demonstrations, flaggedFen, terminalFen) {
+  if (!Array.isArray(demonstrations) || demonstrations.length === 0) return [];
+
+  const result = [];
+  for (const demo of demonstrations) {
+    if (!demo || !Array.isArray(demo.moves) || demo.moves.length === 0) continue;
+
+    const resolvedFen = demo.from === 'userLine' ? terminalFen : flaggedFen;
+    if (!resolvedFen) {
+      console.warn('[demo] Cannot resolve startFen for from=%s — dropping demo', demo.from);
+      continue;
+    }
+
+    try {
+      const chess = new Chess(resolvedFen);
+      const validMoves = [];
+      let dropped = false;
+      for (const san of demo.moves) {
+        const mv = chess.move(san);
+        if (!mv) {
+          console.warn('[demo] Illegal move "%s" in demo from=%s — dropping rest of this demo', san, demo.from);
+          dropped = true;
+          break;
+        }
+        validMoves.push(san);
+      }
+      if (dropped && validMoves.length === 0) continue;
+      result.push({ from: demo.from, moves: validMoves, startFen: resolvedFen });
+    } catch (err) {
+      console.warn('[demo] Validation error for demo from=%s:', demo.from, err.message);
+    }
+  }
+  return result;
+}
+
+// Convert a white-POV centipawn score to a plain-English description.
+function cpToPlainLanguage(cp) {
+  if (cp == null) return 'unclear';
+  if (Math.abs(cp) < 30) return 'roughly equal';
+  if (cp > 600) return 'winning for White';
+  if (cp > 200) return 'clearly better for White';
+  if (cp > 50) return 'slightly better for White';
+  if (cp < -600) return 'winning for Black';
+  if (cp < -200) return 'clearly better for Black';
+  return 'slightly better for Black';
+}
+
+// Build the LLM messages array from stored conversation rows.
+// user_moves and coach_response rows have their readable text in content already;
+// raw move_data is NOT sent to the LLM.
+function buildLLMMessages(rows) {
+  return rows.map(row => ({ role: row.role, content: row.content }));
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -298,13 +400,13 @@ router.get('/conversation/:moveId', async (req, res) => {
     return res.status(404).json({ error: 'Move not found' });
   }
   const messages = (await query(
-    'SELECT role, content FROM conversations WHERE move_id = $1 ORDER BY created_at',
+    'SELECT id, role, content, message_type, move_data FROM conversations WHERE move_id = $1 ORDER BY created_at',
     [moveId]
   )).rows;
   res.json(messages);
 });
 
-// Send a message to the coach.
+// Send a text message to the coach.
 router.post('/conversation/:moveId', async (req, res) => {
   const moveId = parseInt(req.params.moveId, 10);
   if (!Number.isInteger(moveId)) return res.status(400).json({ error: 'Invalid move id' });
@@ -314,12 +416,15 @@ router.post('/conversation/:moveId', async (req, res) => {
     return res.status(404).json({ error: 'Move not found' });
   }
 
-  await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'user', message]);
+  await query(
+    "INSERT INTO conversations (move_id, role, content, message_type) VALUES ($1, $2, $3, 'text')",
+    [moveId, 'user', message]
+  );
 
   const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [req.user.id])).rows[0];
 
   const history = (await query(
-    'SELECT role, content FROM conversations WHERE move_id = $1 ORDER BY created_at',
+    'SELECT id, role, content, message_type, move_data FROM conversations WHERE move_id = $1 ORDER BY created_at',
     [moveId]
   )).rows;
 
@@ -411,7 +516,8 @@ router.post('/conversation/:moveId', async (req, res) => {
     // Build the initial messages array from stored history.
     // Tool-use turns are ephemeral (within this request only); only the final
     // text reply is persisted to the conversations table.
-    const messages = history.map(h => ({ role: h.role, content: h.content }));
+    // LLM only sees readable text — raw move_data is intentionally excluded.
+    const messages = buildLLMMessages(history);
 
     let reply = null;
     let toolCallCount = 0;
@@ -491,14 +597,252 @@ router.post('/conversation/:moveId', async (req, res) => {
       }));
     } catch (_) {}
 
-    await query('INSERT INTO conversations (move_id, role, content) VALUES ($1, $2, $3)', [moveId, 'assistant', reply]);
+    // Parse structured {text, demonstrations} response. Text-only responses
+    // also go through here — demonstrations array will just be empty.
+    const structured = extractStructuredResponse(reply);
+    const resolvedDemos = validateAndResolveDemonstrations(
+      structured.demonstrations,
+      moveRow?.fen,   // flagged position (original)
+      null            // no terminalFen for text-only turns
+    );
+    const moveData = resolvedDemos.length > 0 ? { demonstrations: resolvedDemos } : null;
 
-    res.json({ reply });
+    await query(
+      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
+      [moveId, 'assistant', structured.text, moveData ? JSON.stringify(moveData) : null]
+    );
+
+    res.json({ text: structured.text, demonstrations: resolvedDemos });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 
   // Best-effort: refresh conceptual_profile every 3rd conversation row (scoped to this user).
+  try {
+    const totalRow = (await query(
+      `SELECT COUNT(*)::int AS n
+       FROM conversations c
+       JOIN moves m ON m.id = c.move_id
+       JOIN games g ON g.id = m.game_id
+       WHERE g.user_id = $1`,
+      [req.user.id]
+    )).rows[0];
+    if (totalRow.n % 3 === 0) {
+      updateConceptualProfile(req.user.id).catch(err =>
+        console.error('Conceptual profile update failed:', err)
+      );
+    }
+  } catch (err) {
+    console.error('Conceptual profile trigger check failed:', err);
+  }
+});
+
+// Submit a composed line for coaching. Stores user_moves + coach_response rows.
+// Body: { moves:[{san,from,to}], startFen, terminalFen, terminalEvalCp }
+router.post('/conversation/:moveId/line', async (req, res) => {
+  const moveId = parseInt(req.params.moveId, 10);
+  if (!Number.isInteger(moveId)) return res.status(400).json({ error: 'Invalid move id' });
+
+  if (!await getOwnedMove(moveId, req.user.id)) {
+    return res.status(404).json({ error: 'Move not found' });
+  }
+
+  const { moves, startFen, terminalFen, terminalEvalCp } = req.body || {};
+  if (!Array.isArray(moves) || moves.length === 0 || !startFen || !terminalFen) {
+    return res.status(400).json({ error: 'moves, startFen, and terminalFen are required' });
+  }
+
+  // Build a readable, plain-text description of the submitted line for LLM history.
+  const sanList = moves.map(m => m.san).join(' ');
+  const evalDesc = cpToPlainLanguage(terminalEvalCp);
+  const userContent =
+    `Student submitted a line for board review: ${sanList} (${moves.length} move${moves.length !== 1 ? 's' : ''} from the flagged position). ` +
+    `Engine evaluation of the terminal position: ${evalDesc}.`;
+
+  // Store the user_moves row before calling Claude so history includes it.
+  await query(
+    "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'user_moves', $4)",
+    [moveId, 'user', userContent, JSON.stringify({ moves, startFen, terminalFen, terminalEvalCp })]
+  );
+
+  const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [req.user.id])).rows[0];
+
+  const history = (await query(
+    'SELECT id, role, content, message_type, move_data FROM conversations WHERE move_id = $1 ORDER BY created_at',
+    [moveId]
+  )).rows;
+
+  const currentTurn = history.filter(h => h.role === 'assistant').length + 1;
+  const level = profile?.computed_level || 'intermediate';
+  const maxTurns = MAX_TURNS_BY_LEVEL[level] ?? DEFAULT_MAX_TURNS;
+  const forceAnswer = false; // line submissions are never "give up" signals
+
+  const moveRow = (await query(
+    `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
+            m.classification, m.centipawn_loss, m.principle_violated, g.pgn
+       FROM moves m
+       JOIN games g ON g.id = m.game_id
+      WHERE m.id = $1`,
+    [moveId]
+  )).rows[0];
+
+  // Build (or read cached) verified facts.
+  let facts = null;
+  const cachedRow = (await query('SELECT facts FROM coaching_facts WHERE move_id = $1', [moveId])).rows[0];
+  if (cachedRow?.facts) {
+    try {
+      const parsed = JSON.parse(cachedRow.facts);
+      if (parsed && parsed.ok) facts = parsed;
+    } catch (err) {
+      console.error(`Cached facts for move ${moveId} failed to parse:`, err);
+    }
+  }
+
+  if (!facts) {
+    try {
+      if (moveRow?.pgn) {
+        const fenBefore = reconstructBeforeFen(moveRow.pgn, moveRow.move_number, moveRow.move);
+        if (fenBefore) {
+          const built = buildPositionFacts({
+            fenBefore,
+            playedMoveSan: moveRow.move,
+            classification: moveRow.classification,
+            centipawnLoss: moveRow.centipawn_loss,
+          });
+          if (built && built.ok) {
+            facts = built;
+            try {
+              await query(
+                'INSERT INTO coaching_facts (move_id, facts, computed_at) VALUES ($1, $2, NOW()) ON CONFLICT (move_id) DO UPDATE SET facts = EXCLUDED.facts, computed_at = NOW()',
+                [moveId, JSON.stringify(facts)]
+              );
+            } catch (cacheErr) {
+              console.error(`Failed to cache coaching facts for move ${moveId}:`, cacheErr);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Position facts construction failed:', err);
+    }
+  }
+
+  const systemPrompt = facts
+    ? buildVerifiedFactsPrompt({
+        facts,
+        profile,
+        principleViolated: moveRow?.principle_violated,
+        currentTurn,
+        maxTurns,
+        forceAnswer,
+        engineLevel: ENGINE_CONSULTATION_LEVEL,
+        includeLineDemos: true,
+      })
+    : buildDegradedPrompt({
+        profile,
+        moveSan: moveRow?.move,
+        classification: moveRow?.classification,
+        centipawnLoss: moveRow?.centipawn_loss,
+        principleViolated: moveRow?.principle_violated,
+        currentTurn,
+        maxTurns,
+        forceAnswer,
+      });
+
+  const tools = facts ? [EVALUATE_MOVE_TOOL] : [];
+
+  try {
+    const llmMessages = buildLLMMessages(history);
+    let reply = null;
+    let toolCallCount = 0;
+    let resolvedAtTier = facts ? 1 : 'none';
+    let engineCalled = false;
+    const messagesInFlight = [...llmMessages];
+
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-7',
+          max_tokens: 1200,
+          system: systemPrompt,
+          messages: messagesInFlight,
+          ...(tools.length > 0 ? { tools } : {}),
+        }),
+      });
+
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => '<no body>');
+        throw new Error(`Anthropic ${response.status}: ${errBody}`);
+      }
+
+      const data = await response.json();
+
+      if (data.stop_reason === 'tool_use') {
+        const toolBlock = data.content?.find(b => b.type === 'tool_use');
+        if (!toolBlock) {
+          reply = data.content?.find(b => b.type === 'text')?.text || "I couldn't process that. Try again.";
+          break;
+        }
+
+        toolCallCount++;
+        const { moves: toolMoves, situation } = toolBlock.input || {};
+        console.log(`[coach/line] tool call ${toolCallCount}: evaluate_alternative_move moves=${JSON.stringify(toolMoves)} situation=${situation} moveId=${moveId}`);
+
+        const cascadeResult = await resolveCascade(moveId, facts, toolMoves || [], situation || 'LINE_EXPLORATION');
+        console.log(`[coach/line] cascade result: tier=${cascadeResult.tier} evalCp=${cascadeResult.evalCp}`);
+
+        if (cascadeResult.tier === 3) { resolvedAtTier = 3; engineCalled = true; }
+        else if (cascadeResult.tier === 2 && resolvedAtTier !== 3) { resolvedAtTier = 2; }
+
+        messagesInFlight.push({ role: 'assistant', content: data.content });
+        messagesInFlight.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: toolBlock.id, content: JSON.stringify(cascadeResult) }],
+        });
+        continue;
+      }
+
+      const textBlock = data.content?.find(b => b.type === 'text');
+      reply = textBlock?.text || data.content?.[0]?.text || "I couldn't process that. Try again.";
+      break;
+    }
+
+    if (!reply) reply = "I couldn't generate a response. Please try again.";
+
+    console.log('[TIER/line] ' + JSON.stringify({ moveId, turnNumber: currentTurn, resolvedAtTier, engineCalled }));
+
+    const structured = extractStructuredResponse(reply);
+    const resolvedDemos = validateAndResolveDemonstrations(
+      structured.demonstrations,
+      startFen,
+      terminalFen
+    );
+    const moveData = { demonstrations: resolvedDemos };
+
+    await query(
+      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
+      [moveId, 'assistant', structured.text, JSON.stringify(moveData)]
+    );
+
+    res.json({ text: structured.text, demonstrations: resolvedDemos });
+  } catch (e) {
+    // Roll back the user_moves row on error so the client doesn't see a dangling entry.
+    try {
+      await query(
+        "DELETE FROM conversations WHERE move_id = $1 AND message_type = 'user_moves' AND role = 'user' AND id = (SELECT MAX(id) FROM conversations WHERE move_id = $1 AND message_type = 'user_moves')",
+        [moveId]
+      );
+    } catch (_) {}
+    return res.status(500).json({ error: e.message });
+  }
+
+  // Best-effort profile refresh.
   try {
     const totalRow = (await query(
       `SELECT COUNT(*)::int AS n

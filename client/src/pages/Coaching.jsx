@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Chess } from 'chess.js';
 import { Chessboard } from 'react-chessboard';
@@ -6,6 +6,9 @@ import { api } from '../api.js';
 import { getStockfish, evaluatePositionFull } from '../stockfish.js';
 
 const MAX_EXPLORE_PLIES = 6;
+const DEMO_MOVE_DELAY_MS = 700;
+const DEMO_START_DELAY_MS = 500;
+const DEMO_BETWEEN_DELAY_MS = 800;
 
 export default function Coaching() {
   const { id, moveId } = useParams();
@@ -19,7 +22,6 @@ export default function Coaching() {
   const [lineSent, setLineSent] = useState(false);
   const [error, setError] = useState('');
 
-  // Change 4: first-coaching-session hint, dismissed via localStorage.
   const [hintDismissed, setHintDismissed] = useState(
     () => localStorage.getItem('seenCoachingHint') === 'true'
   );
@@ -30,13 +32,74 @@ export default function Coaching() {
   }
 
   // ── Sequence composer state ────────────────────────────────────────────────
-  // composedFen tracks the board position as the user builds a line.
-  // Initialized from moveContext.fen when context loads; reset clears it back.
   const [composedFen, setComposedFen] = useState(null);
-  const [composedMoves, setComposedMoves] = useState([]); // { san, from, to }
-  // chessRef holds the live Chess instance that validates moves against the
-  // current composed position (not the original).
+  const [composedMoves, setComposedMoves] = useState([]);
   const chessRef = useRef(null);
+
+  // ── Demo animation state ───────────────────────────────────────────────────
+  // demoBoard: FEN string while a demo is active, null otherwise.
+  const [demoBoard, setDemoBoard] = useState(null);
+  const [demoActive, setDemoActive] = useState(false);
+  const demoTimersRef = useRef([]);
+
+  function clearDemoTimers() {
+    demoTimersRef.current.forEach(t => clearTimeout(t));
+    demoTimersRef.current = [];
+  }
+
+  // Animate an array of { from, moves, startFen } demonstrations in order.
+  const animateDemos = useCallback((demonstrations) => {
+    if (!Array.isArray(demonstrations) || demonstrations.length === 0) return;
+    clearDemoTimers();
+    setDemoActive(true);
+
+    let delay = DEMO_START_DELAY_MS;
+    const timers = [];
+
+    for (const demo of demonstrations) {
+      // Set board to the demo's start FEN.
+      const t0 = setTimeout(() => setDemoBoard(demo.startFen), delay);
+      timers.push(t0);
+      delay += DEMO_MOVE_DELAY_MS;
+
+      // Play each move.
+      const chess = new Chess(demo.startFen);
+      for (const san of demo.moves) {
+        try {
+          chess.move(san);
+          const fen = chess.fen();
+          const t = setTimeout(() => setDemoBoard(fen), delay);
+          timers.push(t);
+          delay += DEMO_MOVE_DELAY_MS;
+        } catch {
+          console.warn('[demo animation] Failed to play move:', san);
+          break;
+        }
+      }
+
+      delay += DEMO_BETWEEN_DELAY_MS;
+    }
+
+    // After all demos, mark done (keep board at last demo position).
+    const tEnd = setTimeout(() => setDemoActive(false), delay);
+    timers.push(tEnd);
+    demoTimersRef.current = timers;
+  }, []);
+
+  function handleBackToPosition() {
+    clearDemoTimers();
+    setDemoBoard(null);
+    setDemoActive(false);
+  }
+
+  // Cancel any demo when the user starts interacting with the composer.
+  function cancelDemoIfActive() {
+    if (demoBoard !== null) {
+      clearDemoTimers();
+      setDemoBoard(null);
+      setDemoActive(false);
+    }
+  }
 
   // Re-initialize the composer whenever the flagged move changes.
   useEffect(() => {
@@ -45,14 +108,20 @@ export default function Coaching() {
       setComposedFen(moveContext.fen);
       setComposedMoves([]);
       setLineSent(false);
+      handleBackToPosition();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moveContext?.fen]);
+
+  // Cleanup timers on unmount.
+  useEffect(() => () => clearDemoTimers(), []);
 
   function handlePieceDrop({ piece, sourceSquare, targetSquare }) {
     if (!chessRef.current || !targetSquare) return false;
     if (composedMoves.length >= MAX_EXPLORE_PLIES) return false;
 
-    // Detect pawn promotion: white pawn reaching rank 8, black pawn rank 1.
+    cancelDemoIfActive();
+
     const isPromotion =
       piece.pieceType === 'wP' && targetSquare[1] === '8' ||
       piece.pieceType === 'bP' && targetSquare[1] === '1';
@@ -63,7 +132,7 @@ export default function Coaching() {
       promotion: isPromotion ? 'q' : undefined,
     });
 
-    if (!result) return false; // illegal — snap back
+    if (!result) return false;
 
     setComposedFen(chessRef.current.fen());
     setComposedMoves((prev) => [
@@ -76,8 +145,8 @@ export default function Coaching() {
 
   function handleUndo() {
     if (!composedMoves.length || !moveContext?.fen) return;
+    cancelDemoIfActive();
     const newMoves = composedMoves.slice(0, -1);
-    // Replay from the origin FEN so chessRef stays in sync.
     const chess = new Chess(moveContext.fen);
     newMoves.forEach((m) => chess.move(m.san));
     chessRef.current = chess;
@@ -88,6 +157,7 @@ export default function Coaching() {
 
   function handleReset() {
     if (!moveContext?.fen) return;
+    cancelDemoIfActive();
     chessRef.current = new Chess(moveContext.fen);
     setComposedMoves([]);
     setComposedFen(moveContext.fen);
@@ -100,40 +170,61 @@ export default function Coaching() {
     setError('');
 
     try {
-      // Replay all composed moves from the start FEN to reach the terminal position.
+      // Reach the terminal position.
       const chess = new Chess(moveContext.fen);
       for (const m of composedMoves) {
         chess.move(m.san);
       }
       const terminalFen = chess.fen();
 
-      // Evaluate ONLY the terminal position — never per-move.
+      // Evaluate the terminal position client-side (engine does truth).
       const worker = await getStockfish();
       const { cp, bestMove: bestMoveUci } = await evaluatePositionFull(worker, terminalFen);
 
-      // Convert engine's best-move from UCI to SAN for readability.
-      let bestMoveSan = null;
-      if (bestMoveUci) {
-        try {
-          const evalChess = new Chess(terminalFen);
-          const result = evalChess.move({
-            from: bestMoveUci.slice(0, 2),
-            to: bestMoveUci.slice(2, 4),
-            promotion: bestMoveUci.length === 5 ? bestMoveUci[4] : undefined,
-          });
-          bestMoveSan = result?.san ?? null;
-        } catch (_) {}
-      }
-
       console.log('[Composer] terminal FEN:', terminalFen);
-      console.log('[Composer] eval (white POV cp):', cp, '| best move in terminal position:', bestMoveSan ?? bestMoveUci ?? 'none');
+      console.log('[Composer] eval (white POV cp):', cp);
       console.log('[Composer] start FEN:', moveContext.fen, '| line:', composedMoves.map(m => m.san).join(' '));
 
+      // Show the submitted line as a user message optimistically.
+      const sanLine = composedMoves.map(m => m.san).join(' ');
+      const optimisticUserMsg = {
+        id: `line-${Date.now()}`,
+        role: 'user',
+        message_type: 'user_moves',
+        content: sanLine,
+        move_data: { moves: composedMoves, startFen: moveContext.fen, terminalFen, terminalEvalCp: cp },
+      };
+      setMessages(prev => [...prev, optimisticUserMsg]);
+
+      // Send to coach.
+      const { data } = await api.post(`/coach/conversation/${moveId}/line`, {
+        moves: composedMoves,
+        startFen: moveContext.fen,
+        terminalFen,
+        terminalEvalCp: cp,
+      });
+
+      // data = { text, demonstrations: [{from, moves, startFen}] }
+      const coachMsg = {
+        id: `coach-${Date.now()}`,
+        role: 'assistant',
+        message_type: 'coach_response',
+        content: data.text,
+        move_data: { demonstrations: data.demonstrations || [] },
+      };
+      setMessages(prev => [...prev, coachMsg]);
+
       setLineSent(true);
-      // TODO Step 2: compute intent signals and send to coach.
+
+      // Start animation after coach text appears.
+      if (data.demonstrations && data.demonstrations.length > 0) {
+        animateDemos(data.demonstrations);
+      }
     } catch (err) {
-      console.error('[Composer] evaluation error:', err);
-      setError('Engine evaluation failed — try again.');
+      console.error('[Composer] send line error:', err);
+      // Remove the optimistic user message on error.
+      setMessages(prev => prev.filter(m => !m.id?.startsWith('line-')));
+      setError(err.response?.data?.error || err.message || 'Failed to send line to coach.');
     } finally {
       setSendingLine(false);
     }
@@ -188,17 +279,9 @@ export default function Coaching() {
                   }
                 }
               }
-
-              console.log(
-                '[Coaching] move arrow: from=%s to=%s (san=%s moveNumber=%s method=%s)',
-                fromSquare, toSquare, move.move, moveNumber,
-                fromSquare ? (histEntry ? 'san' : 'fen') : 'none'
-              );
             } catch (err) {
               console.warn('[Coaching] Could not derive move squares from PGN:', err);
             }
-          } else {
-            console.warn('[Coaching] No PGN available — move arrow disabled');
           }
           setMoveContext({
             move: move.move,
@@ -225,7 +308,7 @@ export default function Coaching() {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [messages, sending]);
+  }, [messages, sending, sendingLine]);
 
   async function handleSend(e) {
     e.preventDefault();
@@ -234,7 +317,7 @@ export default function Coaching() {
 
     const optimistic = [
       ...messages,
-      { id: `tmp-${Date.now()}`, role: 'user', content: text },
+      { id: `tmp-${Date.now()}`, role: 'user', message_type: 'text', content: text },
     ];
     setMessages(optimistic);
     setDraft('');
@@ -247,27 +330,23 @@ export default function Coaching() {
         moveContext,
       });
 
-      if (Array.isArray(data)) {
-        setMessages(data);
-      } else if (data && data.messages && Array.isArray(data.messages)) {
-        setMessages(data.messages);
-      } else if (data && (data.role === 'assistant' || data.content)) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: data.id || `srv-${Date.now()}`,
-            role: 'assistant',
-            content: data.content || data.reply || '',
-          },
-        ]);
-      } else if (data && data.reply) {
-        setMessages((prev) => [
-          ...prev,
-          { id: `srv-${Date.now()}`, role: 'assistant', content: data.reply },
-        ]);
-      } else {
-        const conv = await api.get(`/coach/conversation/${moveId}`);
-        setMessages(conv.data || []);
+      // Server now returns { text, demonstrations }.
+      const coachText = data.text ?? data.reply ?? data.content ?? '';
+      const demos = Array.isArray(data.demonstrations) ? data.demonstrations : [];
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `srv-${Date.now()}`,
+          role: 'assistant',
+          message_type: 'coach_response',
+          content: coachText,
+          move_data: { demonstrations: demos },
+        },
+      ]);
+
+      if (demos.length > 0) {
+        animateDemos(demos);
       }
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Send failed');
@@ -278,11 +357,11 @@ export default function Coaching() {
     }
   }
 
-  // Use the composed position when the user is exploring a line.
-  const boardFen = composedFen ?? moveContext?.fen ?? 'start';
+  // Effective board FEN: demo overrides composer, which overrides flagged position.
+  const boardFen = demoBoard ?? composedFen ?? moveContext?.fen ?? 'start';
 
-  // Only show the flagged-move arrow/highlights on the original position.
   const isComposing = composedMoves.length > 0;
+  const inDemoMode = demoBoard !== null;
 
   const moveArrow = useMemo(() => {
     if (!moveContext?.from || !moveContext?.to) return [];
@@ -295,8 +374,6 @@ export default function Coaching() {
     return { [moveContext.from]: tint, [moveContext.to]: tint };
   }, [moveContext]);
 
-  // Format composedMoves into chess-notation tokens: [{ type:'num', text },
-  // { type:'move', san }]. Derives starting move number and side from the FEN.
   const composedLineTokens = useMemo(() => {
     if (!composedMoves.length || !moveContext?.fen) return [];
     const parts = moveContext.fen.split(' ');
@@ -315,6 +392,60 @@ export default function Coaching() {
     });
     return tokens;
   }, [composedMoves, moveContext?.fen]);
+
+  // Render a single message based on its type.
+  function renderMessage(m) {
+    const key = m.id ?? `msg-${m.role}-${m.content?.slice(0, 20)}`;
+
+    if (m.role === 'user' && m.message_type === 'user_moves') {
+      const movesList = m.move_data?.moves?.map(mv => mv.san).join(' ') || m.content;
+      const demos = m.move_data
+        ? [{ from: 'original', moves: m.move_data.moves?.map(mv => mv.san) || [], startFen: m.move_data.startFen }]
+        : [];
+      return (
+        <div key={key} className="chat-msg user" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span className="role">you</span>
+          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 13 }}>
+            Explored: {movesList}
+          </span>
+          {demos[0]?.startFen && demos[0]?.moves?.length > 0 && (
+            <button
+              onClick={() => animateDemos(demos)}
+              style={{ alignSelf: 'flex-start', fontSize: 12, padding: '2px 8px' }}
+            >
+              ▶ Show on board
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    if (m.role === 'assistant') {
+      const demos = m.move_data?.demonstrations || [];
+      return (
+        <div key={key} className="chat-msg assistant" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span className="role">coach</span>
+          <span>{m.content}</span>
+          {demos.length > 0 && (
+            <button
+              onClick={() => animateDemos(demos)}
+              style={{ alignSelf: 'flex-start', fontSize: 12, padding: '2px 8px' }}
+            >
+              ▶ Show demonstration
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // Default: plain text message.
+    return (
+      <div key={key} className={`chat-msg ${m.role}`}>
+        <span className="role">{m.role}</span>
+        {m.content}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -340,19 +471,38 @@ export default function Coaching() {
                       options={{
                         id: 'coach',
                         position: boardFen,
-                        allowDragging: true,
+                        allowDragging: !inDemoMode,
                         allowDrawingArrows: false,
                         boardOrientation: 'white',
                         darkSquareStyle: { backgroundColor: '#3a3a40' },
                         lightSquareStyle: { backgroundColor: '#b6b6bd' },
-                        // Hide flagged-move annotations while exploring a line.
-                        arrows: isComposing ? [] : moveArrow,
-                        squareStyles: isComposing ? {} : squareHighlights,
+                        arrows: (isComposing || inDemoMode) ? [] : moveArrow,
+                        squareStyles: (isComposing || inDemoMode) ? {} : squareHighlights,
                         onPieceDrop: handlePieceDrop,
                       }}
                     />
                   </div>
                 </div>
+
+                {/* Demo-mode overlay */}
+                {inDemoMode && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginBottom: 10,
+                    fontSize: 12,
+                    color: 'var(--text-dim)',
+                  }}>
+                    <span style={{ opacity: 0.8 }}>
+                      {demoActive ? 'Demonstrating…' : 'Demonstration complete'}
+                    </span>
+                    <button onClick={handleBackToPosition} style={{ fontSize: 12, padding: '2px 8px' }}>
+                      Back to position
+                    </button>
+                  </div>
+                )}
+
                 <dl className="move-context">
                   <dt>Move</dt>
                   <dd>{moveContext.move}</dd>
@@ -362,7 +512,6 @@ export default function Coaching() {
                       {moveContext.classification}
                     </span>
                   </dd>
-                  {/* Change 3: only show Principle row when a principle is known */}
                   {moveContext.principle_violated && (
                     <>
                       <dt>Principle</dt>
@@ -428,13 +577,13 @@ export default function Coaching() {
                   }}>
                     <button
                       onClick={handleUndo}
-                      disabled={composedMoves.length === 0}
+                      disabled={composedMoves.length === 0 || sendingLine}
                     >
                       Undo
                     </button>
                     <button
                       onClick={handleReset}
-                      disabled={composedMoves.length === 0}
+                      disabled={composedMoves.length === 0 || sendingLine}
                     >
                       Reset
                     </button>
@@ -443,7 +592,7 @@ export default function Coaching() {
                       onClick={handleSendLine}
                       disabled={composedMoves.length === 0 || sendingLine || lineSent}
                     >
-                      {sendingLine ? 'Evaluating…' : lineSent ? 'Sent' : 'Send line to coach'}
+                      {sendingLine ? 'Sending to coach…' : lineSent ? 'Sent' : 'Send line to coach'}
                     </button>
                   </div>
                 </div>
@@ -456,7 +605,6 @@ export default function Coaching() {
 
         <div>
           <div className="chat">
-            {/* Change 4: first-session Socratic hint, dismissible */}
             {!hintDismissed && (
               <div
                 style={{
@@ -506,14 +654,9 @@ export default function Coaching() {
                   Start by telling the coach what you were thinking on this move.
                 </div>
               ) : (
-                messages.map((m) => (
-                  <div key={m.id} className={`chat-msg ${m.role}`}>
-                    <span className="role">{m.role}</span>
-                    {m.content}
-                  </div>
-                ))
+                messages.map(renderMessage)
               )}
-              {sending && <div className="typing">Coach is thinking…</div>}
+              {(sending || sendingLine) && <div className="typing">Coach is thinking…</div>}
             </div>
 
             <form className="chat-form" onSubmit={handleSend}>
@@ -527,12 +670,12 @@ export default function Coaching() {
                     handleSend(e);
                   }
                 }}
-                disabled={sending || loading || !moveContext}
+                disabled={sending || sendingLine || loading || !moveContext}
               />
               <button
                 type="submit"
                 className="primary"
-                disabled={sending || loading || !moveContext || !draft.trim()}
+                disabled={sending || sendingLine || loading || !moveContext || !draft.trim()}
               >
                 Send
               </button>

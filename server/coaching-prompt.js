@@ -4,6 +4,38 @@
 
 const MAX_LEGAL_MOVES_LISTED = 40;
 
+// Appended to every coaching system prompt — tells the coach how to format its response
+// and when/how to include board demonstrations.
+function buildResponseFormatSection(includeLineDemos) {
+  const demoRules = includeLineDemos
+    ? `
+When the student has submitted a line for board review:
+ - Consider including demonstrations to make the teaching concrete.
+ - "userLine" demo: play from the END of the student's submitted line to show the FLAW — "watch what happens after your moves..."
+ - "original" demo: play from the FLAGGED POSITION to show the BETTER IDEA — "from the start, here's what works..."
+ - The ideal "flaw then fix" pattern: include a "userLine" demo first, then an "original" demo.
+ - Limit each demonstration to 3-5 moves; only include moves that illustrate the teaching point.
+ - Move quality claims in your text must reference the verified facts or engine eval already given to you — never assert quality from your own judgment.`
+    : `
+ - For this text Q&A exchange, set demonstrations to an empty array.`;
+
+  return `
+RESPONSE FORMAT (MANDATORY):
+Your entire response MUST be a single valid JSON object — no text before or after it, no markdown code fences.
+
+{"text": "...", "demonstrations": []}
+
+With board demonstrations:
+{"text": "...", "demonstrations": [{"from": "userLine", "moves": ["Nc3", "Bxc3"]}, {"from": "original", "moves": ["Qd8+"]}]}
+
+Fields:
+ - text: your coaching message. Socratic voice, ≤ 3 sentences, warm, plain English — never raw centipawn numbers.
+ - demonstrations: array of board animations (empty array when no animation is needed).
+   - from: "userLine" = start from the END of the student's explored line; "original" = start from the flagged position.
+   - moves: legal SAN strings applied from that starting position.
+${demoRules}`;
+}
+
 // Appended to the system prompt when the evaluate_alternative_move tool is active.
 function buildToolSection(engineLevel) {
   return `
@@ -67,7 +99,8 @@ function fmtEvalCp(cp) {
 // Builds the full Socratic-coach system prompt with the verified-facts
 // block as the sole source of board truth.
 // engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW' }) {
+// includeLineDemos: true when the current turn is a line submission (enables demo instructions).
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -147,7 +180,8 @@ When at Rung 4 (giving the answer):
  - ALWAYS explain the underlying principle — not just the move, but WHY it was the right idea. This is the lesson.
  - Frame it warmly as a lesson, not a correction.
  - Do not ask another question.
-${buildToolSection(engineLevel)}`;
+${buildToolSection(engineLevel)}
+${buildResponseFormatSection(includeLineDemos)}`;
 }
 
 // Fallback when buildPositionFacts can't run (PGN reconstruction failure,
@@ -221,7 +255,8 @@ When at Rung 4 (giving the answer):
  - Explain the correct idea based on the principle violated and classification. Never invent board details you don't have.
  - ALWAYS explain the underlying principle — not just the move, but WHY it was the right idea. This is the lesson.
  - Frame it warmly as a lesson, not a correction.
- - Do not ask another question.`;
+ - Do not ask another question.
+${buildResponseFormatSection(false)}`;
 }
 
 module.exports = {
@@ -229,4 +264,5 @@ module.exports = {
   buildVerifiedFactsPrompt,
   buildDegradedPrompt,
   buildToolSection,
+  buildResponseFormatSection,
 };
