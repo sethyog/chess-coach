@@ -281,7 +281,7 @@ async function runPatternAnalysis(userId, {
 
   const moveIdLookup = new Map();
   for (const m of moves) {
-    moveIdLookup.set(`Game ${m.game_id} Move ${m.move_number}`, { moveId: m.id, gameId: m.game_id });
+    moveIdLookup.set(`${m.game_id}-${m.move_number}`, { moveId: m.id, gameId: m.game_id });
   }
 
   const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [userId])).rows[0];
@@ -345,7 +345,9 @@ ${movesBlock}`;
     const b = buckets.get(pid);
     if (m.gameId != null) b.gameIds.add(m.gameId);
     if (m.moveRef) {
-      const ids = moveIdLookup.get(m.moveRef);
+      const moveNumMatch = m.moveRef.match(/Move (\d+)/i);
+      const moveNum = moveNumMatch ? parseInt(moveNumMatch[1], 10) : null;
+      const ids = (m.gameId != null && moveNum != null) ? moveIdLookup.get(`${m.gameId}-${moveNum}`) : undefined;
       b.moveRefs.push({ moveRef: m.moveRef, moveId: ids?.moveId, gameId: ids?.gameId });
     }
     if (m.reasoning) b.reasonings.push(m.reasoning);
