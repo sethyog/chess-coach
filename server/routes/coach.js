@@ -279,6 +279,11 @@ async function runPatternAnalysis(userId, {
     return results;
   }
 
+  const moveIdLookup = new Map();
+  for (const m of moves) {
+    moveIdLookup.set(`Game ${m.game_id} Move ${m.move_number}`, { moveId: m.id, gameId: m.game_id });
+  }
+
   const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [userId])).rows[0];
   const level = profile?.computed_level || 'intermediate';
   let principles = (await query('SELECT * FROM principles WHERE level = $1 ORDER BY id', [level])).rows;
@@ -339,7 +344,10 @@ ${movesBlock}`;
     if (!buckets.has(pid)) buckets.set(pid, { principleId: pid, gameIds: new Set(), moveRefs: [], reasonings: [] });
     const b = buckets.get(pid);
     if (m.gameId != null) b.gameIds.add(m.gameId);
-    if (m.moveRef) b.moveRefs.push(m.moveRef);
+    if (m.moveRef) {
+      const ids = moveIdLookup.get(m.moveRef);
+      b.moveRefs.push({ moveRef: m.moveRef, moveId: ids?.moveId, gameId: ids?.gameId });
+    }
     if (m.reasoning) b.reasonings.push(m.reasoning);
   }
 
@@ -358,7 +366,7 @@ ${movesBlock}`;
 
     const summaryPrompt = `In 2 sentences, explain this recurring pattern to a ${level} chess player and what they should specifically focus on to fix it.
 Principle: ${name} — ${description}
-Violated in: ${cand.movesViolating.join(', ')}
+Violated in: ${cand.movesViolating.map(mv => (typeof mv === 'string' ? mv : mv.moveRef)).join(', ')}
 Reasoning per move:
 ${cand.reasonings.map(r => `- ${r}`).join('\n')}`;
 

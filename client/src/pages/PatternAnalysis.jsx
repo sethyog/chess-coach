@@ -477,14 +477,24 @@ function PatternCard({ pattern, totalGames, gamesSummary, expanded, onToggle }) 
 
       {expanded && (
         <ul style={{ marginTop: 12, paddingLeft: 18 }}>
-          {pattern.movesViolating.map((moveRef, i) => (
-            <li key={i} style={{ marginBottom: 6 }}>
-              <span style={{ color: 'var(--text)' }}>{moveRef}</span>
-              {pattern.reasonings?.[i] && (
-                <span className="muted"> — {pattern.reasonings[i]}</span>
-              )}
-            </li>
-          ))}
+          {pattern.movesViolating.map((entry, i) => {
+            const label = typeof entry === 'string' ? entry : entry.moveRef;
+            const canLink = entry && typeof entry === 'object' && entry.moveId && entry.gameId;
+            return (
+              <li key={i} style={{ marginBottom: 6 }}>
+                {canLink ? (
+                  <Link to={`/game/${entry.gameId}/move/${entry.moveId}`}>
+                    {label} →
+                  </Link>
+                ) : (
+                  <span style={{ color: 'var(--text)' }}>{label}</span>
+                )}
+                {pattern.reasonings?.[i] && (
+                  <span className="muted"> — {pattern.reasonings[i]}</span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
