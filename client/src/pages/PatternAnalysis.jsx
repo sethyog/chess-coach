@@ -7,6 +7,37 @@ import { useAnalysis } from '../AnalysisContext.jsx';
 // calls. Total runtime can exceed the default axios 60s timeout.
 const PATTERN_ANALYSIS_TIMEOUT_MS = 5 * 60 * 1000;
 
+// ── Trajectory helpers (cross-batch state badge) ─────────────────────────────
+
+const STATE_CONFIG = {
+  RECURRING: { label: 'Recurring',   color: 'var(--gold)',     border: 'var(--gold)'    },
+  IMPROVING: { label: 'Improving ↑', color: 'var(--green)',    border: 'var(--green)'   },
+  RESOLVED:  { label: 'Resolved ✓',  color: 'var(--green)',    border: 'var(--green)'   },
+  NEW:       { label: 'New',         color: 'var(--text-dim)', border: 'var(--border)'  },
+};
+
+function StateBadge({ state }) {
+  const cfg = STATE_CONFIG[state];
+  if (!cfg) return null;
+  return (
+    <span className="tag" style={{ color: cfg.color, borderColor: cfg.border }}>
+      {cfg.label}
+    </span>
+  );
+}
+
+// Build principleId → { state, comparisonLine } from a GET /coach/progression response.
+// Returns null when < 2 batches exist (canCompute: false).
+function buildTrajectoryMap(progressionData) {
+  if (!progressionData?.canCompute) return null;
+  return new Map(
+    progressionData.principles.map(p => [
+      p.principleId,
+      { state: p.state, comparisonLine: p.comparisonLine },
+    ])
+  );
+}
+
 // Minimum games required to unlock per-format analysis (mirrors server/format.js MIN_GAMES).
 const MIN_GAMES = { classical: 3, rapid: 5, bullet: 8 };
 
@@ -87,10 +118,18 @@ export default function PatternAnalysis() {
     if (formatCache[fmt]) return;
     setFormatCache(prev => ({ ...prev, [fmt]: { state: 'loading', results: null, error: '' } }));
     try {
-      const { data } = await api.get(`/coach/patterns/latest?format=${fmt}`);
+      const [{ data }, progressionResp] = await Promise.all([
+        api.get(`/coach/patterns/latest?format=${fmt}`),
+        api.get(`/coach/progression?format=${fmt}`).catch(() => ({ data: null })),
+      ]);
       setFormatCache(prev => ({
         ...prev,
-        [fmt]: { state: 'ready', results: data, error: '' },
+        [fmt]: {
+          state: 'ready',
+          results: data,
+          trajectoryMap: buildTrajectoryMap(progressionResp.data),
+          error: '',
+        },
       }));
     } catch (err) {
       setFormatCache(prev => ({
@@ -135,9 +174,15 @@ export default function PatternAnalysis() {
         { timeout: PATTERN_ANALYSIS_TIMEOUT_MS },
       );
       setReadyFormats(prev => prev.filter(r => r.format !== format));
+      const progressionResp = await api.get(`/coach/progression?format=${format}`).catch(() => ({ data: null }));
       setFormatCache(prev => ({
         ...prev,
-        [format]: { state: 'ready', results: data, error: '' },
+        [format]: {
+          state: 'ready',
+          results: data,
+          trajectoryMap: buildTrajectoryMap(progressionResp.data),
+          error: '',
+        },
       }));
     } catch (err) {
       setFormatCache(prev => ({
@@ -238,7 +283,7 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
     );
   }
 
-  const { results } = cache;
+  const { results, trajectoryMap } = cache;
   const hasAnalysis = results && results.patterns != null;
 
   // State C: completed batch exists — show pattern results.
@@ -250,6 +295,7 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
         onReanalyse={null}
         expanded={expanded}
         onToggle={onToggle}
+        trajectoryMap={trajectoryMap}
       />
     );
   }
@@ -307,7 +353,7 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
 
 // ── Shared results view ───────────────────────────────────────────────────────
 
-function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle }) {
+function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle, trajectoryMap }) {
   const {
     patterns,
     gamesAnalysed,
@@ -428,6 +474,7 @@ function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle 
             gamesSummary={gamesSummary}
             expanded={!!expanded[p.principleId]}
             onToggle={() => onToggle(p.principleId)}
+            trajectory={trajectoryMap?.get(p.principleId) ?? null}
           />
         ))
       )}
@@ -435,7 +482,7 @@ function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle 
   );
 }
 
-function PatternCard({ pattern, totalGames, gamesSummary, expanded, onToggle }) {
+function PatternCard({ pattern, totalGames, gamesSummary, expanded, onToggle, trajectory }) {
   const gameMap = new Map(gamesSummary.map((g) => [g.id, g]));
   const affectedGames = pattern.gamesAffected
     .map((id) => gameMap.get(id))
@@ -449,9 +496,12 @@ function PatternCard({ pattern, totalGames, gamesSummary, expanded, onToggle }) 
         style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}
       >
         <h3 style={{ margin: 0 }}>{pattern.principleName}</h3>
-        <span className="tag mistake">
-          Found in {pattern.frequency} of {totalGames} games
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
+          <span className="tag mistake">
+            Found in {pattern.frequency} of {totalGames} games
+          </span>
+          {trajectory && <StateBadge state={trajectory.state} />}
+        </div>
       </div>
 
       {affectedGames.length > 0 && (
@@ -462,6 +512,9 @@ function PatternCard({ pattern, totalGames, gamesSummary, expanded, onToggle }) 
               {formatDate(g.played_at)})
             </span>
           ))}
+          {trajectory?.comparisonLine && (
+            <span> · {trajectory.comparisonLine}</span>
+          )}
         </div>
       )}
 

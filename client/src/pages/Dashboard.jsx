@@ -154,7 +154,13 @@ function AnalysisDoneCard({ format, onDismiss }) {
   );
 }
 
-function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
+const TRAJECTORY_WORD = {
+  RECURRING: 'still recurring',
+  IMPROVING: 'improving ↑',
+  NEW: 'new this batch',
+};
+
+function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed, topTrajectory }) {
   const wrapStyle = {
     opacity: dimmed ? 0.45 : 1,
     transition: 'opacity 0.3s',
@@ -251,7 +257,12 @@ function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed }) {
           >
             Top weakness{formatLabel}
           </div>
-          <h2 style={{ margin: '4px 0 6px' }}>{top.principleName}</h2>
+          <h2 style={{ margin: '4px 0 4px' }}>{top.principleName}</h2>
+          {topTrajectory && TRAJECTORY_WORD[topTrajectory] && (
+            <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+              {TRAJECTORY_WORD[topTrajectory]}
+            </div>
+          )}
           <div className="muted" style={{ fontSize: 12 }}>
             Found in {top.frequency} game{top.frequency === 1 ? '' : 's'}
             {' · '}Last analysed: {formatDate(latest.analysedAt)}
@@ -275,6 +286,7 @@ export default function Dashboard() {
   const [error, setError] = useState('');
   const [latest, setLatest] = useState(null);
   const [latestLoading, setLatestLoading] = useState(true);
+  const [topTrajectory, setTopTrajectory] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profileLoading, setProfileLoading] = useState(true);
 
@@ -332,6 +344,32 @@ export default function Dashboard() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Fetch the top weakness's cross-batch state whenever latest changes.
+  // Only runs for formats with 2+ batches; silently stays null otherwise.
+  useEffect(() => {
+    const fmt = latest?.format;
+    const topPid = latest?.patterns?.[0]?.principleId;
+    if (!['classical', 'rapid', 'bullet'].includes(fmt) || !topPid || topPid === 'OTHER') {
+      setTopTrajectory(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await api.get(`/coach/progression?format=${fmt}`);
+        if (!cancelled) {
+          const match = data.canCompute
+            ? data.principles.find(p => p.principleId === topPid)
+            : null;
+          setTopTrajectory(match?.state ?? null);
+        }
+      } catch {
+        if (!cancelled) setTopTrajectory(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [latest]);
 
   useEffect(() => {
     let cancelled = false;
@@ -624,6 +662,7 @@ export default function Dashboard() {
         loading={loading || latestLoading}
         showImportNudge={showImportNudge}
         dimmed={isNewUser}
+        topTrajectory={topTrajectory}
       />
 
       {/* Change 2: de-emphasize empty games list for new users */}

@@ -12,6 +12,7 @@ import GameReview from './pages/GameReview.jsx';
 import Coaching from './pages/Coaching.jsx';
 import Onboarding from './pages/Onboarding.jsx';
 import PatternAnalysis from './pages/PatternAnalysis.jsx';
+import Progression from './pages/Progression.jsx';
 import Admin from './pages/Admin.jsx';
 import Login from './pages/Login.jsx';
 import { AuthProvider, useAuth } from './AuthContext.jsx';
@@ -139,6 +140,7 @@ export default function App() {
                   <Route path="/" element={<Dashboard />} />
                   <Route path="/onboarding" element={<Onboarding />} />
                   <Route path="/patterns" element={<PatternAnalysis />} />
+                  <Route path="/progress" element={<Progression />} />
                   <Route path="/game/:id" element={<GameReview />} />
                   <Route path="/game/:id/move/:moveId" element={<Coaching />} />
                   <Route path="/admin" element={<Admin />} />

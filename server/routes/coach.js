@@ -11,6 +11,7 @@ const { resolveCascade, ENGINE_CONSULTATION_LEVEL } = require('../engine-cascade
 const { getEnginePv } = require('../engine');
 const { BATCH_THRESHOLD, MIN_GAMES } = require('../format');
 const { getReadyFormats } = require('../ready-formats');
+const { computeProgression, generateAndCacheProgressionSummary } = require('../progression');
 
 // ── Tool definition (sent to Claude on every coaching request with verified facts) ──
 const EVALUATE_MOVE_TOOL = {
@@ -924,6 +925,40 @@ router.post('/conversation/:moveId/line', async (req, res) => {
   }
 });
 
+// Cross-batch progression for a specific format.
+// Returns computed progression states plus the cached coach summary (if any).
+// The coach summary is NEVER generated here — only served from cache.
+// Query param: format = classical | rapid | bullet
+router.get('/progression', async (req, res) => {
+  const { format } = req.query;
+  if (!['classical', 'rapid', 'bullet'].includes(format)) {
+    return res.status(400).json({ error: 'format must be one of classical, rapid, bullet' });
+  }
+  try {
+    const result = await computeProgression(req.user.id, format);
+    if (!result.canCompute) {
+      return res.json({ canCompute: false, totalBatches: result.totalBatches });
+    }
+    // Serve cached summary only — no LLM call on GET.
+    const { rows } = await query(
+      `SELECT summary, last_batch_number, generated_at
+       FROM progression_summaries
+       WHERE user_id = $1 AND format = $2`,
+      [req.user.id, format]
+    );
+    const cached = rows[0];
+    const summaryIsCurrent = cached && cached.last_batch_number >= result.maxBatchNumber;
+    return res.json({
+      ...result,
+      coachSummary: summaryIsCurrent ? cached.summary : null,
+      summaryGeneratedAt: summaryIsCurrent ? cached.generated_at : null,
+    });
+  } catch (e) {
+    console.error('Progression load failed:', e);
+    return res.status(500).json({ error: 'Failed to load progression data' });
+  }
+});
+
 // Lightweight check: which formats are ready for a new batch analysis.
 // Returns: { readyFormats: Array<{ format, isFirstRun, totalGames }> }
 // Called on dashboard and pattern-analysis mount so the prompt appears
@@ -1150,6 +1185,20 @@ router.post('/patterns/batch', async (req, res) => {
     );
 
     console.log(`[batch] all done format=${format} batchesRun=${batchSlices.length} games_since_last_batch=${newGamesSince}`);
+
+    // Trigger progression summary generation when >= 2 completed batches exist.
+    // This is the ONLY place we call the LLM for progression — never on GET.
+    // Fire-and-forget so the batch response is not delayed by summary generation.
+    query(
+      `SELECT COUNT(*)::int AS n FROM analysis_batches WHERE user_id = $1 AND format = $2 AND status = 'completed'`,
+      [req.user.id, format]
+    ).then(({ rows: [{ n }] }) => {
+      if (n >= 2) {
+        generateAndCacheProgressionSummary(req.user.id, format).catch(err =>
+          console.error('[progression] summary generation failed:', err)
+        );
+      }
+    }).catch(err => console.error('[progression] batch count check failed:', err));
 
     res.json({ ...lastResults, format, batchId: lastBatchId, batchNumber: lastBatchNumber, batchesRun: batchSlices.length });
   } catch (e) {

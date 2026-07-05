@@ -430,6 +430,22 @@ async function initDb() {
       console.log('Migration: added pattern_analyses.batch_number');
     }
 
+    // ── progression_summaries ────────────────────────────────────────────────
+    // One cached coach narrative per user per format, regenerated only when a
+    // new batch completes. Never generated on GET requests (cost control).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS progression_summaries (
+        id            SERIAL PRIMARY KEY,
+        user_id       INTEGER NOT NULL REFERENCES users(id),
+        format        TEXT    NOT NULL
+          CHECK (format IN ('classical', 'rapid', 'bullet')),
+        last_batch_number INTEGER NOT NULL,
+        summary       TEXT    NOT NULL,
+        generated_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, format)
+      )
+    `);
+
     console.log('Database initialized');
   } finally {
     client.release();
