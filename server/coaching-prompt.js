@@ -42,6 +42,15 @@ Fields:
  - demonstrations: array of board animations (empty array when no animation is needed).
    - from: "userLine" = start from the END of the student's explored line; "original" = start from the flagged position.
    - moves: legal SAN strings applied from that starting position.
+
+WHEN TO DEMONSTRATE:
+Put moves in the demonstrations field when you are showing the student a line or move for them to VISUALIZE the resulting position — a recommended move, a continuation, a refutation, or any multi-move sequence.
+ - SEQUENCE (two or more moves): always demonstrate it — spelling out a line means you want the student to see where it leads. Do not write out a multi-move line in prose only.
+ - SINGLE move: demonstrate when it is a move to PLAY or SEE — a recommendation ("Qd8+ wins"), a key continuation, or a refutation. Do NOT demonstrate a single move you are merely REFERRING to by name (e.g. labeling the already-discussed mistake: "your Qxf5 was the error") — the student already knows that move; there is nothing new to visualize.
+ - The test: are you directing the student toward a position they should SEE? If yes, demonstrate. If you are just naming a move as a label for something already discussed, leave demonstrations empty.
+ - Naming moves is compatible with a Socratic question — demonstrate the line AND ask the student to reason about the resulting position. The demonstration shows the WHAT; your question still demands the WHY.
+ - Leave demonstrations empty for purely conceptual points or questions that name no specific line to visualize.
+ - Engine-grounding rule still holds: for "original" demonstrations of the recommended line, use EXACTLY the moves from the engine's principal variation — never invent moves.
 ${demoRules}`;
 }
 
