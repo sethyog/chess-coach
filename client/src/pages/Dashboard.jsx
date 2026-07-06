@@ -268,7 +268,15 @@ function PatternCard({ latest, gameCount, loading, showImportNudge, dimmed, topT
             {' · '}Last analysed: {formatDate(latest.analysedAt)}
           </div>
         </div>
-        <Link to="/patterns">View all →</Link>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <Link to="/patterns">View all →</Link>
+          <Link
+            to={`/progress${latest.format && latest.format !== 'all' ? `?format=${latest.format}` : ''}`}
+            style={{ fontSize: 12 }}
+          >
+            View progress →
+          </Link>
+        </div>
       </div>
     </section>
   );

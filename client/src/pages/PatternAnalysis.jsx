@@ -393,7 +393,12 @@ function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle,
               Last analysed: {formatDateTime(analysedAt)}
             </div>
           </div>
-          {onReanalyse && <button onClick={onReanalyse}>Re-analyse</button>}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {onReanalyse && <button onClick={onReanalyse}>Re-analyse</button>}
+            <Link to={`/progress${results.format && results.format !== 'all' ? `?format=${results.format}` : ''}`}>
+              View full progress →
+            </Link>
+          </div>
         </div>
 
         <div className="grid-2" style={{ marginTop: 18 }}>
