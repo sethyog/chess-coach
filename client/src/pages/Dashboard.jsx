@@ -508,8 +508,8 @@ export default function Dashboard() {
 
   return (
     <>
-      {/* Change 1: orientation line for new/light users only */}
-      {isNewUser && (
+      {/* Empty-state guidance: shown only when the user has no games at all. */}
+      {!loading && games.length === 0 && (
         <p
           style={{
             margin: '0 0 18px',
@@ -518,8 +518,8 @@ export default function Dashboard() {
             lineHeight: 1.6,
           }}
         >
-          Import your games and I'll surface the recurring mistakes holding
-          you back — then coach you through them, one move at a time.
+          Import your games and discover the hidden patterns costing you rating —
+          then let your coach turn each mistake into a lesson.
         </p>
       )}
 

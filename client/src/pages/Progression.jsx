@@ -161,6 +161,12 @@ function PrincipleCard({ principle }) {
 function FormatProgressContent({ format, cache }) {
   const label = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' }[format] || format;
 
+  const [showProgressionHint] = useState(() => {
+    const seen = localStorage.getItem('hint_seen_progression') === 'true';
+    if (!seen) localStorage.setItem('hint_seen_progression', 'true');
+    return !seen;
+  });
+
   if (!cache || cache.state === 'loading') {
     return (
       <div className="panel">
@@ -202,6 +208,22 @@ function FormatProgressContent({ format, cache }) {
     <>
       {/* Summary panel: counts + cached coach narrative */}
       <section className="panel">
+        {showProgressionHint && (
+          <div
+            style={{
+              padding: '10px 14px',
+              marginBottom: 16,
+              border: '1px solid var(--border)',
+              borderRadius: 2,
+              background: 'rgba(240, 192, 96, 0.04)',
+              fontSize: 12,
+              color: 'var(--text-dim)',
+              lineHeight: 1.55,
+            }}
+          >
+            Watch your weaknesses shrink over time — proof that the work is paying off, one batch of games at a time.
+          </div>
+        )}
         <CountsRow counts={counts} totalBatches={totalBatches} />
 
         {coachSummary && (

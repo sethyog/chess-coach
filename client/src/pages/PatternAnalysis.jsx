@@ -99,6 +99,18 @@ export default function PatternAnalysis() {
 
   const [expanded, setExpanded] = useState({});
 
+  // Per-format game counts — used to compute "N games away" in the locked state.
+  const [formatGameCounts, setFormatGameCounts] = useState({});
+  useEffect(() => {
+    api.get('/games').then(({ data: games }) => {
+      const counts = {};
+      for (const g of games) {
+        if (g.format) counts[g.format] = (counts[g.format] || 0) + 1;
+      }
+      setFormatGameCounts(counts);
+    }).catch(() => {});
+  }, []);
+
   // On mount: check which formats are ready for analysis.
   useEffect(() => {
     (async () => {
@@ -253,6 +265,7 @@ export default function PatternAnalysis() {
         gameAnalysisProgress={gameAnalysisProgress}
         expanded={expanded}
         onToggle={togglePattern}
+        gameCount={formatGameCounts[selectedFormat] || 0}
       />
     </>
   );
@@ -260,7 +273,7 @@ export default function PatternAnalysis() {
 
 // ── Format-specific tab ───────────────────────────────────────────────────────
 
-function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysingFormat, gameAnalysisProgress, expanded, onToggle }) {
+function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysingFormat, gameAnalysisProgress, expanded, onToggle, gameCount }) {
   const label = { classical: 'Classical', rapid: 'Rapid', bullet: 'Bullet' }[format] || format;
   const minGames = MIN_GAMES[format] || 3;
   const readyEntry = readyFormats.find(r => r.format === format);
@@ -337,15 +350,13 @@ function FormatTabContent({ format, cache, readyFormats, onRunAnalysis, analysin
   }
 
   // State B: not enough games yet.
+  const remaining = Math.max(1, minGames - gameCount);
   return (
     <div className="panel">
       <h2>{label} analysis</h2>
       <div className="empty">
-        Import at least {minGames} {label.toLowerCase()} games to unlock {label} analysis.
-        <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
-          Once you have enough games, import them from Dashboard and confirm "Run analysis"
-          when prompted.
-        </div>
+        You're {remaining} game{remaining === 1 ? '' : 's'} away from your first pattern
+        analysis — play them and see what your coach uncovers.
       </div>
     </div>
   );
@@ -361,6 +372,12 @@ function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle,
     totalMistakesMapped,
     analysedAt,
   } = results;
+
+  const [showPatternsHint] = useState(() => {
+    const seen = localStorage.getItem('hint_seen_patterns') === 'true';
+    if (!seen) localStorage.setItem('hint_seen_patterns', 'true');
+    return !seen;
+  });
 
   if (gamesAnalysed < 3) {
     return (
@@ -446,6 +463,23 @@ function PatternResults({ results, formatLabel, onReanalyse, expanded, onToggle,
           </div>
         </div>
       </section>
+
+      {showPatternsHint && (
+        <div
+          style={{
+            padding: '10px 14px',
+            marginTop: 12,
+            border: '1px solid var(--border)',
+            borderRadius: 2,
+            background: 'rgba(240, 192, 96, 0.04)',
+            fontSize: 12,
+            color: 'var(--text-dim)',
+            lineHeight: 1.55,
+          }}
+        >
+          Here's what's really holding you back — the same mistakes, game after game. Tap any move to work on it with your coach.
+        </div>
+      )}
 
       <div
         style={{

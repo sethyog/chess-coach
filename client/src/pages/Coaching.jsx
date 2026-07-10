@@ -23,14 +23,17 @@ export default function Coaching() {
   const [lineNote, setLineNote] = useState('');
   const [error, setError] = useState('');
 
-  const [hintDismissed, setHintDismissed] = useState(
-    () => localStorage.getItem('seenCoachingHint') === 'true'
-  );
+  const [showCoachingHint] = useState(() => {
+    const seen = localStorage.getItem('seenCoachingHint') === 'true';
+    if (!seen) localStorage.setItem('seenCoachingHint', 'true');
+    return !seen;
+  });
 
-  function dismissHint() {
-    localStorage.setItem('seenCoachingHint', 'true');
-    setHintDismissed(true);
-  }
+  const [showBoardHint] = useState(() => {
+    const seen = localStorage.getItem('hint_seen_board') === 'true';
+    if (!seen) localStorage.setItem('hint_seen_board', 'true');
+    return !seen;
+  });
 
   // ── Sequence composer state ────────────────────────────────────────────────
   const [composedFen, setComposedFen] = useState(null);
@@ -562,7 +565,9 @@ export default function Coaching() {
                   </div>
                   {composedMoves.length === 0 ? (
                     <p style={{ margin: 0, color: 'var(--text-dim)', fontSize: 13 }}>
-                      Drag pieces to explore a line.
+                      {showBoardHint
+                        ? "Can't see the line in your head? Drag the pieces, play it out, and let your coach show you where it leads."
+                        : 'Drag pieces to explore a line.'}
                     </p>
                   ) : (
                     <>
@@ -651,44 +656,18 @@ export default function Coaching() {
 
         <div>
           <div className="chat">
-            {!hintDismissed && (
+            {showCoachingHint && (
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 10,
                   padding: '10px 14px',
                   borderBottom: '1px solid var(--border)',
                   background: 'rgba(240, 192, 96, 0.04)',
                   fontSize: 12,
                   color: 'var(--text-dim)',
                   lineHeight: 1.55,
-                  flexShrink: 0,
                 }}
               >
-                <span>
-                  This coach asks before it tells — share what you were
-                  thinking and it'll guide you from there.
-                </span>
-                <button
-                  onClick={dismissHint}
-                  aria-label="Dismiss hint"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-dim)',
-                    padding: '0 2px',
-                    fontSize: 16,
-                    lineHeight: 1,
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                    minWidth: 20,
-                    opacity: 0.7,
-                  }}
-                >
-                  ×
-                </button>
+                Your coach asks before it tells — think out loud, and you'll find the answer yourself.
               </div>
             )}
 
