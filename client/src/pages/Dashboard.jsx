@@ -301,6 +301,8 @@ export default function Dashboard() {
   // Import section: collapsed by default; auto-expands if user has no games.
   const [importExpanded, setImportExpanded] = useState(false);
   const importInitialized = useRef(false);
+  // Manual PGN form: hidden behind a link by default (secondary path).
+  const [manualExpanded, setManualExpanded] = useState(false);
 
   // Format-aware batch analysis prompt state.
   const [readyFormats, setReadyFormats] = useState([]);
@@ -503,8 +505,6 @@ export default function Dashboard() {
     !!latest?.analysedAt &&
     new Date(profile.last_import_at).getTime() > new Date(latest.analysedAt).getTime();
 
-  // New-user state: fewer than 3 games and done loading.
-  const isNewUser = !loading && games.length < 3;
 
   return (
     <>
@@ -523,39 +523,29 @@ export default function Dashboard() {
         </p>
       )}
 
-      {/* ── Collapsible import section ───────────────────────────────── */}
-      <div
-        className="panel"
-        onClick={() => setImportExpanded((e) => !e)}
-        role="button"
-        aria-expanded={importExpanded}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          cursor: 'pointer',
-          userSelect: 'none',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Import games</h2>
-        <span
-          style={{
-            fontSize: 20,
-            lineHeight: 1,
-            color: 'var(--gold)',
-            transition: 'transform 0.15s ease',
-            transform: importExpanded ? 'rotate(90deg)' : 'none',
-          }}
-        >
-          ▸
-        </span>
-      </div>
-
-      {importExpanded && (
+      {/* ── Import section ───────────────────────────────────────────── */}
+      {!importExpanded ? (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            onClick={() => setImportExpanded(true)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--gold)',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontFamily: 'inherit',
+              padding: 0,
+            }}
+          >
+            Import more games →
+          </button>
+        </div>
+      ) : (
         <>
           {profileLoading ? (
             <section className="panel">
-              <h2>Import from Chess.com</h2>
               <div className="empty">Loading…</div>
             </section>
           ) : (
@@ -566,80 +556,86 @@ export default function Dashboard() {
             />
           )}
 
-          <div
-            style={{
-              textAlign: 'center',
-              fontSize: 11,
-              letterSpacing: '0.16em',
-              textTransform: 'uppercase',
-              color: 'var(--text-dim)',
-              margin: '6px 0',
-            }}
-          >
-            or
-          </div>
-
-          <section className="panel">
-            <h2>New game</h2>
-            <p className="muted" style={{ marginTop: 0 }}>
-              Paste the PGN. The coach reviews it after Stockfish flags the moves.
-            </p>
-            <form className="form-stack" onSubmit={handleSave}>
-              <div className="row">
-                <input
-                  type="text"
-                  placeholder="Opponent name"
-                  value={opponent}
-                  onChange={(e) => setOpponent(e.target.value)}
-                  disabled={saving}
-                />
-                <select
-                  value={result}
-                  onChange={(e) => setResult(e.target.value)}
-                  disabled={saving}
-                >
-                  <option value="win">Win</option>
-                  <option value="loss">Loss</option>
-                  <option value="draw">Draw</option>
-                </select>
-                <select
-                  value={userColor}
-                  onChange={(e) => setUserColor(e.target.value)}
-                  disabled={saving}
-                >
-                  <option value="white">I played White</option>
-                  <option value="black">I played Black</option>
-                </select>
-              </div>
-              <textarea
-                rows={8}
-                placeholder='[Event "Casual"]&#10;[White "You"]&#10;[Black "Opponent"]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ...'
-                value={pgn}
-                onChange={(e) => setPgn(e.target.value)}
-                disabled={saving}
-              />
-              {/* Change 5: PGN hint for less-technical users */}
-              <p
+          {!manualExpanded ? (
+            <div style={{ textAlign: 'center', margin: '4px 0 10px' }}>
+              <button
+                type="button"
+                onClick={() => setManualExpanded(true)}
                 style={{
-                  margin: 0,
-                  fontSize: 12,
+                  background: 'none',
+                  border: 'none',
                   color: 'var(--text-dim)',
-                  lineHeight: 1.5,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontFamily: 'inherit',
+                  padding: 0,
                 }}
               >
-                Paste the game text from Chess.com or Lichess (look under Share → PGN).
+                or paste a game manually →
+              </button>
+            </div>
+          ) : (
+            <section className="panel">
+              <h2>New game</h2>
+              <p className="muted" style={{ marginTop: 0 }}>
+                Paste the PGN. The coach reviews it after Stockfish flags the moves.
               </p>
-              {error && <div className="error">{error}</div>}
-              <div className="row" style={{ justifyContent: 'flex-end' }}>
-                <button type="submit" className="primary" disabled={saving}>
-                  {saving ? 'Saving…' : 'Save game'}
-                </button>
-              </div>
-            </form>
-          </section>
+              <form className="form-stack" onSubmit={handleSave}>
+                <div className="row">
+                  <input
+                    type="text"
+                    placeholder="Opponent name"
+                    value={opponent}
+                    onChange={(e) => setOpponent(e.target.value)}
+                    disabled={saving}
+                  />
+                  <select
+                    value={result}
+                    onChange={(e) => setResult(e.target.value)}
+                    disabled={saving}
+                  >
+                    <option value="win">Win</option>
+                    <option value="loss">Loss</option>
+                    <option value="draw">Draw</option>
+                  </select>
+                  <select
+                    value={userColor}
+                    onChange={(e) => setUserColor(e.target.value)}
+                    disabled={saving}
+                  >
+                    <option value="white">I played White</option>
+                    <option value="black">I played Black</option>
+                  </select>
+                </div>
+                <textarea
+                  rows={8}
+                  placeholder='[Event "Casual"]&#10;[White "You"]&#10;[Black "Opponent"]&#10;&#10;1. e4 e5 2. Nf3 Nc6 ...'
+                  value={pgn}
+                  onChange={(e) => setPgn(e.target.value)}
+                  disabled={saving}
+                />
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 12,
+                    color: 'var(--text-dim)',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Paste the game text from Chess.com or Lichess (look under Share → PGN).
+                </p>
+                {error && <div className="error">{error}</div>}
+                <div className="row" style={{ justifyContent: 'flex-end' }}>
+                  <button type="submit" className="primary" disabled={saving}>
+                    {saving ? 'Saving…' : 'Save game'}
+                  </button>
+                </div>
+              </form>
+            </section>
+          )}
         </>
       )}
-      {/* ── End collapsible import section ──────────────────────────── */}
+      {/* ── End import section ────────────────────────────────────────── */}
 
       {/* ── Format-aware analysis prompts ───────────────────────────── */}
       {batchError && (
@@ -663,30 +659,45 @@ export default function Dashboard() {
       )}
       {/* ── End format analysis prompts ──────────────────────────────── */}
 
-      {/* Change 2: de-emphasize locked pattern card for new users */}
-      <PatternCard
-        latest={latest}
-        gameCount={games.length}
-        loading={loading || latestLoading}
-        showImportNudge={showImportNudge}
-        dimmed={isNewUser}
-        topTrajectory={topTrajectory}
-      />
+      {/* Pattern analysis: quiet one-liner when locked, full card once accessible */}
+      {!loading && games.length < 3 ? (
+        <p
+          style={{
+            margin: '0 0 12px',
+            fontSize: 12,
+            color: 'var(--text-dim)',
+            lineHeight: 1.6,
+          }}
+        >
+          Pattern analysis unlocks with {Math.max(1, 3 - games.length)} more game{3 - games.length === 1 ? '' : 's'}.
+        </p>
+      ) : (
+        <PatternCard
+          latest={latest}
+          gameCount={games.length}
+          loading={loading || latestLoading}
+          showImportNudge={showImportNudge}
+          topTrajectory={topTrajectory}
+        />
+      )}
 
-      {/* Change 2: de-emphasize empty games list for new users */}
-      <div
-        style={{
-          opacity: isNewUser ? 0.45 : 1,
-          transition: 'opacity 0.3s',
-          pointerEvents: isNewUser ? 'none' : undefined,
-        }}
-      >
+      {/* Your games: quiet one-liner when empty, full list once games exist */}
+      {!loading && games.length === 0 ? (
+        <p
+          style={{
+            margin: '0 0 12px',
+            fontSize: 12,
+            color: 'var(--text-dim)',
+            lineHeight: 1.6,
+          }}
+        >
+          Your imported games will appear here.
+        </p>
+      ) : (
         <section className="panel">
           <h2>Your games</h2>
           {loading ? (
             <div className="empty">Loading…</div>
-          ) : games.length === 0 ? (
-            <div className="empty">No games yet. Paste a PGN above to begin.</div>
           ) : (
             <div className="games-list">
               {games.map((g) => (
@@ -708,7 +719,7 @@ export default function Dashboard() {
             </div>
           )}
         </section>
-      </div>
+      )}
     </>
   );
 }
