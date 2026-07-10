@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 
 const TIME_CLASS_OPTIONS = [
@@ -27,14 +26,6 @@ function formatDate(iso) {
   });
 }
 
-function resultClass(result) {
-  const r = (result || '').toLowerCase();
-  if (r === 'win') return 'win';
-  if (r === 'loss') return 'loss';
-  if (r === 'draw') return 'draw';
-  return '';
-}
-
 function labelFor(value) {
   const opt = TIME_CLASS_OPTIONS.find((o) => o.value === value);
   return opt ? opt.label.toLowerCase() : value;
@@ -51,7 +42,6 @@ export default function ChessComImport({
   const [count, setCount] = useState(10);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
-  const [importedRows, setImportedRows] = useState([]);
   const [error, setError] = useState('');
 
   async function handleSubmit(e) {
@@ -65,7 +55,6 @@ export default function ChessComImport({
     setError('');
     setLoading(true);
     setResult(null);
-    setImportedRows([]);
 
     try {
       const { data } = await api.post(
@@ -87,18 +76,6 @@ export default function ChessComImport({
 
       setResult(data);
 
-      // Fetch the full game rows for the newly imported games so we can show
-      // opponent/result/date in the success list.
-      if (data.gameIds && data.gameIds.length > 0) {
-        try {
-          const { data: all } = await api.get('/games');
-          const byId = new Map(all.map((g) => [g.id, g]));
-          setImportedRows(data.gameIds.map((id) => byId.get(id)).filter(Boolean));
-        } catch {
-          // Best-effort — the counts above still tell the user what happened.
-        }
-      }
-
       if (onImported) onImported(data);
     } catch (err) {
       if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '')) {
@@ -115,7 +92,6 @@ export default function ChessComImport({
 
   function reset() {
     setResult(null);
-    setImportedRows([]);
     setError('');
   }
 
@@ -145,7 +121,7 @@ export default function ChessComImport({
       )}
 
       {isSuccess ? (
-        <SuccessView result={result} rows={importedRows} onReset={reset} />
+        <SuccessView result={result} onReset={reset} />
       ) : (
         <form className="form-stack" onSubmit={handleSubmit}>
           <input
@@ -216,7 +192,7 @@ export default function ChessComImport({
   );
 }
 
-function SuccessView({ result, rows, onReset }) {
+function SuccessView({ result, onReset }) {
   return (
     <div className="form-stack">
       <div>
@@ -225,29 +201,8 @@ function SuccessView({ result, rows, onReset }) {
         {' · '}
         {result.skipped} already existed
         {result.failed > 0 ? ` · ${result.failed} failed` : ''}
+        {' · see them below in Your games'}
       </div>
-
-      {rows.length > 0 && (
-        <div className="games-list">
-          {rows.map((g) => (
-            <Link
-              key={g.id}
-              to={`/game/${g.id}`}
-              className="game-row"
-              style={{ textDecoration: 'none', color: 'inherit' }}
-            >
-              <div>
-                <div className="opponent">vs {g.opponent || 'Unknown'}</div>
-                <div className="date">{formatDate(g.played_at)}</div>
-              </div>
-              <span className={`result ${resultClass(g.result)}`}>
-                {g.result || '—'}
-              </span>
-              <span className="muted">Review →</span>
-            </Link>
-          ))}
-        </div>
-      )}
 
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button onClick={onReset}>Import more</button>
