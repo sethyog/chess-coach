@@ -37,26 +37,26 @@ function RequireAuth({ children }) {
 function OnboardingGate({ children }) {
   const location = useLocation();
   // Fast path: localStorage is set on this device already.
-  const [status, setStatus] = useState(
-    localStorage.getItem('onboardingComplete') ? 'done' : 'loading'
+  const [checking, setChecking] = useState(
+    !localStorage.getItem('onboardingComplete')
   );
 
   useEffect(() => {
-    if (status !== 'loading') return;
+    if (!checking) return;
     // No localStorage flag — check the server to avoid re-asking users who
     // already submitted a rating on a different device.
     api.get('/profile').then(({ data }) => {
       if (data?.reported_rating != null) {
         localStorage.setItem('onboardingComplete', '1');
-        setStatus('done');
-      } else {
-        setStatus('needed');
       }
-    }).catch(() => setStatus('needed'));
-  }, [status]);
+    }).catch(() => {}).finally(() => setChecking(false));
+  }, [checking]);
 
-  if (status === 'loading') return null;
-  if (status === 'needed' && location.pathname !== '/onboarding') {
+  if (checking) return null;
+  // Read localStorage fresh on every render (rather than caching the result
+  // in state) so completing onboarding — which sets the flag then navigates
+  // away — is picked up immediately instead of bouncing back here.
+  if (!localStorage.getItem('onboardingComplete') && location.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />;
   }
   return children;
