@@ -144,6 +144,30 @@ function buildEngineReason({ classification, centipawnLoss, playedMoveDetails })
   return parts.join('; ') + '.';
 }
 
+// Pure chess.js facts for a FEN with no "move under review" context — used to
+// ground the TERMINAL position of a coach demonstration (Part 2 of the
+// board-hallucination fix). Same ground-truth fields as buildPositionFacts
+// (pieceMap, sideToMove, legalMoves) minus the played-move narrative, since a
+// demonstrated line's endpoint has no "move under review" of its own.
+function buildBoardFacts(fen) {
+  let chess;
+  try {
+    chess = new Chess(fen);
+  } catch (e) {
+    return { ok: false, error: `Invalid FEN: ${e.message}` };
+  }
+  return {
+    ok: true,
+    fen,
+    sideToMove: chess.turn() === 'w' ? 'white' : 'black',
+    pieceMap: buildPieceMap(chess),
+    legalMoves: chess.moves(),
+    isCheck: chess.inCheck(),
+    isCheckmate: chess.isCheckmate(),
+    isStalemate: chess.isStalemate(),
+  };
+}
+
 // Pure facts derived from the BEFORE-FEN. chess.js fields are authoritative
 // ground truth. Engine-shaped fields (eval / bestMove) are populated from
 // the values stored during game analysis. centipawnSwing comes from
@@ -228,6 +252,7 @@ function buildPositionFacts({
 
 module.exports = {
   buildPositionFacts,
+  buildBoardFacts,
   reconstructBeforeFen,
   PIECE_NAMES,
 };

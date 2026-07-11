@@ -5,10 +5,11 @@ const router = express.Router();
 const { Chess } = require('chess.js');
 const { query } = require('../db');
 const { logCandidate } = require('../principle-candidates');
-const { reconstructBeforeFen, buildPositionFacts } = require('../position-facts');
-const { buildVerifiedFactsPrompt, buildDegradedPrompt } = require('../coaching-prompt');
+const { reconstructBeforeFen, buildPositionFacts, buildBoardFacts } = require('../position-facts');
+const { buildVerifiedFactsPrompt, buildDegradedPrompt, PROSE_CONCRETE_PLY_LIMIT } = require('../coaching-prompt');
 const { resolveCascade, ENGINE_CONSULTATION_LEVEL } = require('../engine-cascade');
-const { getEnginePv } = require('../engine');
+const { getEnginePv, evaluateFen } = require('../engine');
+const { applyProseBackstop } = require('../prose-backstop');
 const { BATCH_THRESHOLD, MIN_GAMES } = require('../format');
 const { getReadyFormats } = require('../ready-formats');
 const { computeProgression, generateAndCacheProgressionSummary } = require('../progression');
@@ -138,12 +139,61 @@ function validateAndResolveDemonstrations(demonstrations, flaggedFen, terminalFe
         validMoves.push(san);
       }
       if (dropped && validMoves.length === 0) continue;
-      result.push({ from: demo.from, moves: validMoves, startFen: resolvedFen });
+      result.push({ from: demo.from, moves: validMoves, startFen: resolvedFen, resultFen: chess.fen() });
     } catch (err) {
       console.warn('[demo] Validation error for demo from=%s:', demo.from, err.message);
     }
   }
   return result;
+}
+
+// Part 2 of the board-hallucination fix: ground each demonstration's
+// TERMINAL position with the same chess.js facts used for the flagged
+// position (buildBoardFacts), plus a best-effort engine eval in plain
+// language. This is what the Part 3 prose backstop checks the coach's text
+// against, and what gets persisted so a later turn asking about "that line"
+// has real facts instead of the coach re-guessing from memory.
+async function attachTerminalFacts(resolvedDemos) {
+  const enriched = [];
+  for (const demo of resolvedDemos) {
+    const board = buildBoardFacts(demo.resultFen);
+    let evalPlain = 'not yet computed';
+    if (board.ok) {
+      try {
+        const evalResult = await evaluateFen(demo.resultFen);
+        if (evalResult.ok && evalResult.evalCp != null) {
+          evalPlain = cpToPlainLanguage(evalResult.evalCp);
+        }
+      } catch (err) {
+        console.warn('[demo] Terminal eval failed for %s:', demo.resultFen, err.message);
+      }
+    }
+    enriched.push({
+      ...demo,
+      terminalFacts: board.ok
+        ? { sideToMove: board.sideToMove, pieceMap: board.pieceMap, legalMoves: board.legalMoves, evalPlain }
+        : null,
+    });
+  }
+  return enriched;
+}
+
+// Pulls the most recent coach turn's grounded demonstrations (with
+// terminalFacts) out of conversation history, so this turn's prompt can
+// reference "the line I showed you last time" with real facts instead of
+// re-deriving them from memory. Returns null when the last coach turn had no
+// grounded demos — deliberately does not reach further back, since facts
+// from two-turns-ago are less likely to be what "that line" refers to now.
+function getPriorDemoFacts(history) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const row = history[i];
+    if (row.role !== 'assistant' || row.message_type !== 'coach_response') continue;
+    const demos = row.move_data?.demonstrations;
+    if (!Array.isArray(demos)) return null;
+    const grounded = demos.filter((d) => d && d.terminalFacts);
+    return grounded.length > 0 ? grounded : null;
+  }
+  return null;
 }
 
 // Convert a white-POV centipawn score to a plain-English description.
@@ -536,6 +586,7 @@ router.post('/conversation/:moveId', async (req, res) => {
         forceAnswer,
         engineLevel: ENGINE_CONSULTATION_LEVEL,
         enginePv,
+        priorDemoFacts: getPriorDemoFacts(history),
       })
     : buildDegradedPrompt({
         profile,
@@ -644,14 +695,31 @@ router.post('/conversation/:moveId', async (req, res) => {
       fenBefore ?? moveRow?.fen,  // before-position where the choice was made
       null                        // no terminalFen for text-only turns
     );
-    const moveData = resolvedDemos.length > 0 ? { demonstrations: resolvedDemos } : null;
+    const groundedDemos = await attachTerminalFacts(resolvedDemos);
+
+    // Part 3 backstop: strip any prose claim that's geometrically impossible
+    // or references a piece absent from every verified position we know
+    // about (the flagged position + this turn's grounded demos). Logged for
+    // measurement regardless of outcome — see coaching-prompt.js Part 1 for
+    // the primary, prompt-level defense this backs up.
+    const backstop = applyProseBackstop(structured.text, {
+      facts,
+      groundedDemos,
+      plyLimit: PROSE_CONCRETE_PLY_LIMIT,
+    });
+    if (backstop.violations.length > 0 || backstop.sequenceHits.length > 0) {
+      console.warn('[prose-backstop] moveId=%d violations=%j sequenceHits=%j', moveId, backstop.violations, backstop.sequenceHits);
+    }
+    const finalText = backstop.cleanedText;
+
+    const moveData = groundedDemos.length > 0 ? { demonstrations: groundedDemos } : null;
 
     await query(
       "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
-      [moveId, 'assistant', structured.text, moveData ? JSON.stringify(moveData) : null]
+      [moveId, 'assistant', finalText, moveData ? JSON.stringify(moveData) : null]
     );
 
-    res.json({ text: structured.text, demonstrations: resolvedDemos });
+    res.json({ text: finalText, demonstrations: groundedDemos });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
@@ -800,6 +868,7 @@ router.post('/conversation/:moveId/line', async (req, res) => {
         includeLineDemos: true,
         enginePv,
         userNote: trimmedNote,
+        priorDemoFacts: getPriorDemoFacts(history),
       })
     : buildDegradedPrompt({
         profile,
@@ -886,14 +955,26 @@ router.post('/conversation/:moveId/line', async (req, res) => {
       startFen,
       terminalFen
     );
-    const moveData = { demonstrations: resolvedDemos };
+    const groundedDemos = await attachTerminalFacts(resolvedDemos);
+
+    const backstop = applyProseBackstop(structured.text, {
+      facts,
+      groundedDemos,
+      plyLimit: PROSE_CONCRETE_PLY_LIMIT,
+    });
+    if (backstop.violations.length > 0 || backstop.sequenceHits.length > 0) {
+      console.warn('[prose-backstop/line] moveId=%d violations=%j sequenceHits=%j', moveId, backstop.violations, backstop.sequenceHits);
+    }
+    const finalText = backstop.cleanedText;
+
+    const moveData = { demonstrations: groundedDemos };
 
     await query(
       "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
-      [moveId, 'assistant', structured.text, JSON.stringify(moveData)]
+      [moveId, 'assistant', finalText, JSON.stringify(moveData)]
     );
 
-    res.json({ text: structured.text, demonstrations: resolvedDemos });
+    res.json({ text: finalText, demonstrations: groundedDemos });
   } catch (e) {
     // Roll back the user_moves row on error so the client doesn't see a dangling entry.
     try {

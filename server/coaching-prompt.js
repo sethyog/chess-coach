@@ -4,6 +4,16 @@
 
 const MAX_LEGAL_MOVES_LISTED = 40;
 
+// How many plies beyond the current verified position the coach may make
+// concrete claims about in free-text prose (piece interactions, whose move
+// it is, what's hanging). Above this depth, no chess.js facts exist, so any
+// prose claim is the LLM's own unverified board reasoning — the source of
+// the color-bound-bishop class of hallucination. Claims deeper than this
+// must go through the demonstrations channel instead (computed + verified).
+// Tunable: voice delivery may want this at 0 (no concrete prose claims at
+// all), since a spoken claim can't be re-read and sounds more authoritative.
+const PROSE_CONCRETE_PLY_LIMIT = 1;
+
 // Appended to every coaching system prompt — tells the coach how to format its response
 // and when/how to include board demonstrations.
 // enginePv: array of SAN moves from the engine's PV (may be empty if unavailable).
@@ -51,6 +61,13 @@ Put moves in the demonstrations field when you are showing the student a line or
  - Naming moves is compatible with a Socratic question — demonstrate the line AND ask the student to reason about the resulting position. The demonstration shows the WHAT; your question still demands the WHY.
  - Leave demonstrations empty for purely conceptual points or questions that name no specific line to visualize.
  - Engine-grounding rule still holds: for "original" demonstrations of the recommended line, use EXACTLY the moves from the engine's principal variation — never invent moves.
+
+CONCRETE CLAIMS VS CONCEPTUAL COACHING (mandatory boundary):
+ - You have verified facts for the CURRENT position only. Any position more than ${PROSE_CONCRETE_PLY_LIMIT} move${PROSE_CONCRETE_PLY_LIMIT === 1 ? '' : 's'} deep from there is UNVERIFIED — you cannot reliably compute it in your head.
+ - Prose (the "text" field) may state facts straight from VERIFIED FACTS (current piece locations, side to move, the move under review), and may name the immediate one-move effect of a single move — but ONLY when that effect is true in THIS position; never reuse a stock pattern (like "denies the knight a square") unless the piece it refers to actually exists where you claim.
+ - Prose must NEVER narrate a multi-move sequence (structured as "after move, move, move...") or assert a concrete claim — a piece attacking, capturing, challenging, or defending a square; whose move it is; what is hanging — about any position more than ${PROSE_CONCRETE_PLY_LIMIT} move deep. You have no facts there; anything you say is a guess, and board-geometry guesses from memory are frequently wrong (for instance, a light-squared bishop can never reach a dark square — that piece is color-bound for its entire existence on the board).
+ - If a deeper line matters to the teaching point, SHOW it: put the moves in "demonstrations" (chess.js-computed and verified) and describe the PLAN in prose ("this brings the rook to the open file") — never assert what happens on a specific square in an undemonstrated line.
+ - When in doubt, stay conceptual. Discussing the plan or principle without naming specific squares beyond the allowed depth is always safe, and is preferred over guessing.
 ${demoRules}`;
 }
 
@@ -114,11 +131,32 @@ function fmtEvalCp(cp) {
   return `${cp} cp (white POV)`;
 }
 
+// Renders the prior turn's grounded demonstration(s) as an additional
+// verified-facts block (Part 2 of the board-hallucination fix). Empty string
+// when there's nothing to show — callers can splice this in unconditionally.
+function formatPriorDemoFactsForPrompt(priorDemoFacts) {
+  if (!Array.isArray(priorDemoFacts) || priorDemoFacts.length === 0) return '';
+
+  const blocks = priorDemoFacts
+    .filter((d) => d && d.terminalFacts)
+    .map((demo, i) => {
+      const tf = demo.terminalFacts;
+      const label = demo.from === 'userLine' ? "the student's submitted line" : 'the recommended line';
+      const indentedMap = tf.pieceMap.split('\n').map((l) => '     ' + l).join('\n');
+      return ` - Line ${i + 1} (${label}, moves played: ${demo.moves.join(' ')}):\n     Side to move after this line: ${tf.sideToMove}\n     Piece positions after this line:\n${indentedMap}\n     Position assessment: ${tf.evalPlain}`;
+    })
+    .join('\n');
+
+  if (!blocks) return '';
+
+  return `\n\nPREVIOUSLY DEMONSTRATED LINE(S) — verified facts for the position AFTER the line(s) you showed the student last turn (computed by chess.js, same as VERIFIED FACTS above):\n${blocks}\n - These are real, computed positions — you MAY reference concrete facts about them (piece locations, side to move, the plain-language assessment) if the student asks about "that line" or "that position".\n - This does NOT extend your reach further: you still may not calculate NEW moves beyond these positions, or more than ${PROSE_CONCRETE_PLY_LIMIT} move past them, in prose. Demonstrate any further line instead.`;
+}
+
 // Builds the full Socratic-coach system prompt with the verified-facts
 // block as the sole source of board truth.
 // engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
 // includeLineDemos: true when the current turn is a line submission (enables demo instructions).
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [], userNote = null }) {
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [], userNote = null, priorDemoFacts = [] }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -166,13 +204,14 @@ ${indentedPieceMap}
  - Engine's principal variation from the before-position (verified by chess.js, up to 4 plies): ${enginePv.length ? enginePv.join(', ') : 'not available'}
  - Why it was a mistake (engine-derived summary): ${facts.engine.engineReason}
  - Principle violated: ${principleViolated || 'none identified yet'}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
-${intentSection}
+${intentSection}${formatPriorDemoFactsForPrompt(priorDemoFacts)}
 STRICT RULES:
  - Treat the verified facts as absolute truth; never contradict them.
  - Never state a piece is on a square unless the piece map says so.
  - Legality is never yours to judge — chess.js handles it for both student and coach moves. Treat every move the student submitted as legal; your role is to explain quality and consequences only, never to rule on whether a move was legal.
  - Never assert a side to move other than the stated one.
  - Do not calculate your own tactical lines beyond what the engine facts already say. If asked about a line not covered, say you'd need to check rather than guess.
+ - Concrete claims about positions more than ${PROSE_CONCRETE_PLY_LIMIT} move deep must go through a demonstration, never prose — see CONCRETE CLAIMS VS CONCEPTUAL COACHING below.
  - If the engine's preferred move, eval, or PV is listed as "not yet computed", do NOT invent one. Acknowledge that detail isn't available and continue with the facts that ARE listed.
  - If unsure about any board detail, ASK the player; do not assert.
  - Your job is to EXPLAIN the engine's verified conclusion Socratically at the player's level — not to work out what is true on the board.
@@ -291,4 +330,5 @@ module.exports = {
   buildDegradedPrompt,
   buildToolSection,
   buildResponseFormatSection,
+  PROSE_CONCRETE_PLY_LIMIT,
 };

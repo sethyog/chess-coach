@@ -1,0 +1,72 @@
+[
+  {
+    "id": "deep_line_color_bound_bishop",
+    "_note": "The original reported bug: a multi-ply invented line ends with an impossible claim that a light-squared bishop (d3) challenges a piece on a dark square (e5), referred to by pronoun ('challenge it'). Must be caught by the color-binding check regardless of any demonstrated line.",
+    "fen": "r2q1rk1/ppp2pbp/2np2p1/8/3PP3/3B1N2/PPP2PPP/R1BQ1RK1 w - - 0 20",
+    "played_move": "Qe2",
+    "grounded_demo": { "from": "original", "moves": ["h3", "Ne5", "Nxe5", "Bxe5"] },
+    "reply": "After h3 Ne5 Nxe5, Black's bishop on g7 recaptures with Bxe5, and then your bishop on d3 could challenge it.",
+    "expect_stripped": true,
+    "expect_violation_type": "color_binding"
+  },
+  {
+    "id": "shallow_claim_nonexistent_piece",
+    "_note": "A one-ply reference to a piece that doesn't exist anywhere in the verified facts. 'Shallow' does not mean 'safe' — this is the gap flagged after live Part 1 testing (the model echoed a stock 'h3 denies the knight g4' pattern when no such knight existed).",
+    "fen": "r2q1rk1/ppp2pbp/2np2p1/8/3PP3/3B1N2/PPP2PPP/R1BQ1RK1 w - - 0 20",
+    "played_move": "Qe2",
+    "grounded_demo": null,
+    "reply": "No worries — the engine prefers h3, which takes the g4 square away from Black's knight on g4 before it causes trouble.",
+    "expect_stripped": true,
+    "expect_violation_type": "piece_existence"
+  },
+  {
+    "id": "shallow_claim_real_piece_not_flagged",
+    "_note": "Same shallow-claim shape, but the knight genuinely exists on g4 in this fixture's position. Must NOT be flagged — the allowed one-ply reference still has to work.",
+    "fen": "r2q1rk1/ppp2pbp/2n3p1/8/3PP1n1/3B1N2/PPP2PPP/R1BQ1RK1 w - - 0 20",
+    "played_move": "Qe2",
+    "grounded_demo": null,
+    "reply": "No worries — the engine prefers h3, kicking the knight on g4 back before it causes any trouble.",
+    "expect_stripped": false,
+    "expect_violation_type": null
+  },
+  {
+    "id": "conceptual_prose_not_flagged",
+    "_note": "Purely conceptual coaching prose with no concrete piece-square claims beyond the current position. Must NOT be flagged.",
+    "fen": "r2q1rk1/ppp2pbp/2np2p1/8/3PP3/3B1N2/PPP2PPP/R1BQ1RK1 w - - 0 20",
+    "played_move": "Qe2",
+    "grounded_demo": null,
+    "reply": "The engine prefers h3 here, a quiet but useful move that keeps your options flexible. The idea is prophylaxis: deny Black active piece play before committing your queen.",
+    "expect_stripped": false,
+    "expect_violation_type": null
+  },
+  {
+    "id": "grounded_demo_claim_not_flagged",
+    "_note": "A concrete claim about a square that IS covered by a grounded demonstration's terminal facts (Part 2). Must NOT be flagged — this is the whole point of forwarding terminal facts forward.",
+    "fen": "r2q1rk1/ppp2pbp/2np2p1/8/3PP3/3B1N2/PPP2PPP/R1BQ1RK1 w - - 0 20",
+    "played_move": "Qe2",
+    "grounded_demo": { "from": "original", "moves": ["h3", "Ne5", "Nxe5", "Bxe5"] },
+    "reply": "After that line, the bishop on e5 sits centrally but can be challenged with a well-timed pawn push.",
+    "expect_stripped": false,
+    "expect_violation_type": null
+  },
+  {
+    "id": "past_reference_not_flagged",
+    "_note": "A past-tense move reference. Squares from history may legitimately be absent from current verified facts — must NOT be flagged.",
+    "fen": "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6",
+    "played_move": "Be2",
+    "grounded_demo": null,
+    "reply": "After the recapture Nxd4 that already happened, White gained strong central control.",
+    "expect_stripped": false,
+    "expect_violation_type": null
+  },
+  {
+    "id": "wrong_piece_type_on_real_square",
+    "_note": "b5 really does have a piece, but the reply names the wrong TYPE (knight instead of bishop). Must be flagged as ungrounded — the piece-existence check enforces type match, not just square occupancy.",
+    "fen": "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3",
+    "played_move": "a6",
+    "grounded_demo": null,
+    "reply": "The knight on b5 is creating problems for you. What were you hoping to do about that knight with your move a6?",
+    "expect_stripped": true,
+    "expect_violation_type": "piece_existence"
+  }
+]

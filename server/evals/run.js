@@ -8,6 +8,7 @@ const positionFacts = require('./deterministic/position_facts.eval');
 const routing = require('./deterministic/routing.eval');
 const scoping = require('./deterministic/scoping.eval');
 const coachingAdherence = require('./fact_adherence/coaching_adherence.eval');
+const proseBackstop = require('./fact_adherence/prose_backstop.eval');
 
 async function main() {
   console.log('══════════════════════════════════════════════════════════════════');
@@ -19,9 +20,10 @@ async function main() {
     routing.run(),
     scoping.run(),
     coachingAdherence.run(),
+    proseBackstop.run(),
   ]);
 
-  const [pfResult, routingResult, scopingResult, adherenceResult] = allResults;
+  const [pfResult, routingResult, scopingResult, adherenceResult, backstopResult] = allResults;
 
   // ── Scorecard ──────────────────────────────────────────────────────────────
   console.log('\n══════════════════════════════════════════════════════════════════');
@@ -50,6 +52,7 @@ async function main() {
   console.log(
     `     violations: piece_position=${v.piece_position}  side_to_move=${v.side_to_move}  move_legality=${v.move_legality}`
   );
+  scoreLine('prose_backstop', backstopResult);
 
   // ── Overall ────────────────────────────────────────────────────────────────
   const grandTotal = allResults.reduce((s, r) => s + (r.total - (r.skipped || 0)), 0);
