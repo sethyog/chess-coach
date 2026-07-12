@@ -272,6 +272,21 @@ async function getOwnedMove(moveId, userId) {
   )).rows[0];
 }
 
+// Feedback may only be attached to an actual coach response the requesting
+// user owns (via conversations.move_id -> moves.game_id -> games.user_id) —
+// the same ownership chain getOwnedMove uses for the conversation routes.
+async function getOwnedCoachMessage(messageId, userId) {
+  return (await query(
+    `SELECT c.id FROM conversations c
+     JOIN moves m ON m.id = c.move_id
+     JOIN games g ON g.id = m.game_id
+     WHERE c.id = $1 AND g.user_id = $2 AND c.role = 'assistant' AND c.message_type = 'coach_response'`,
+    [messageId, userId]
+  )).rows[0];
+}
+
+const FEEDBACK_REASONS = new Set(['unclear', 'not_helpful', 'wrong_tone', 'too_long']);
+
 // ── Core pattern analysis ─────────────────────────────────────────────────────
 // Shared function used by both the legacy /patterns route and the format-aware
 // /patterns/batch route. Throws on mapping failure so callers can handle the
@@ -461,9 +476,15 @@ router.get('/conversation/:moveId', async (req, res) => {
   if (!await getOwnedMove(moveId, req.user.id)) {
     return res.status(404).json({ error: 'Move not found' });
   }
+  // LEFT JOIN this user's own feedback so a rated coach message carries its
+  // rating/reason back on reload — scoped by user_id, same as any other row.
   const messages = (await query(
-    'SELECT id, role, content, message_type, move_data FROM conversations WHERE move_id = $1 ORDER BY created_at',
-    [moveId]
+    `SELECT c.id, c.role, c.content, c.message_type, c.move_data, cf.rating, cf.reason
+       FROM conversations c
+       LEFT JOIN coach_feedback cf ON cf.message_id = c.id AND cf.user_id = $2
+      WHERE c.move_id = $1
+      ORDER BY c.created_at`,
+    [moveId, req.user.id]
   )).rows;
   res.json(messages);
 });
@@ -714,12 +735,12 @@ router.post('/conversation/:moveId', async (req, res) => {
 
     const moveData = groundedDemos.length > 0 ? { demonstrations: groundedDemos } : null;
 
-    await query(
-      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
+    const inserted = (await query(
+      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4) RETURNING id",
       [moveId, 'assistant', finalText, moveData ? JSON.stringify(moveData) : null]
-    );
+    )).rows[0];
 
-    res.json({ text: finalText, demonstrations: groundedDemos });
+    res.json({ messageId: inserted.id, text: finalText, demonstrations: groundedDemos });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
@@ -969,12 +990,12 @@ router.post('/conversation/:moveId/line', async (req, res) => {
 
     const moveData = { demonstrations: groundedDemos };
 
-    await query(
-      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4)",
+    const inserted = (await query(
+      "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4) RETURNING id",
       [moveId, 'assistant', finalText, JSON.stringify(moveData)]
-    );
+    )).rows[0];
 
-    res.json({ text: finalText, demonstrations: groundedDemos });
+    res.json({ messageId: inserted.id, text: finalText, demonstrations: groundedDemos });
   } catch (e) {
     // Roll back the user_moves row on error so the client doesn't see a dangling entry.
     try {
@@ -1004,6 +1025,58 @@ router.post('/conversation/:moveId/line', async (req, res) => {
   } catch (err) {
     console.error('Conceptual profile trigger check failed:', err);
   }
+});
+
+// Record (or update) a thumbs up/down rating on a coach message.
+// Body: { messageId, rating: 'up'|'down', reason?: one of FEEDBACK_REASONS }
+// Idempotent per (user, message): re-rating the same message upserts,
+// never inserts a second row (UNIQUE constraint on coach_feedback).
+router.post('/feedback', async (req, res) => {
+  const { messageId, rating, reason = null } = req.body || {};
+  const parsedMessageId = parseInt(messageId, 10);
+
+  if (!Number.isInteger(parsedMessageId)) {
+    return res.status(400).json({ error: 'messageId must be an integer' });
+  }
+  if (rating !== 'up' && rating !== 'down') {
+    return res.status(400).json({ error: "rating must be 'up' or 'down'" });
+  }
+  if (reason != null && !FEEDBACK_REASONS.has(reason)) {
+    return res.status(400).json({ error: `reason must be one of: ${[...FEEDBACK_REASONS].join(', ')}` });
+  }
+  // Reason is a 👎-only refinement — silently drop it on a 👍 rather than
+  // erroring, since the client shouldn't need to know this rule either.
+  const effectiveReason = rating === 'down' ? reason : null;
+
+  if (!await getOwnedCoachMessage(parsedMessageId, req.user.id)) {
+    return res.status(404).json({ error: 'Coach message not found' });
+  }
+
+  const row = (await query(
+    `INSERT INTO coach_feedback (user_id, message_id, rating, reason)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, message_id)
+     DO UPDATE SET rating = EXCLUDED.rating, reason = EXCLUDED.reason, updated_at = NOW()
+     RETURNING id, rating, reason`,
+    [req.user.id, parsedMessageId, rating, effectiveReason]
+  )).rows[0];
+
+  res.json({ messageId: parsedMessageId, rating: row.rating, reason: row.reason });
+});
+
+// Remove a rating (used when the user taps the same rating again to un-rate).
+router.delete('/feedback/:messageId', async (req, res) => {
+  const messageId = parseInt(req.params.messageId, 10);
+  if (!Number.isInteger(messageId)) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+
+  await query(
+    'DELETE FROM coach_feedback WHERE user_id = $1 AND message_id = $2',
+    [req.user.id, messageId]
+  );
+
+  res.json({ messageId, rating: null, reason: null });
 });
 
 // Cross-batch progression for a specific format.

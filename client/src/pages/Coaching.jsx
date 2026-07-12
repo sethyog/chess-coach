@@ -10,6 +10,13 @@ const DEMO_MOVE_DELAY_MS = 700;
 const DEMO_START_DELAY_MS = 500;
 const DEMO_BETWEEN_DELAY_MS = 800;
 
+const REASON_CHIPS = [
+  { value: 'unclear', label: 'Unclear' },
+  { value: 'not_helpful', label: 'Not helpful' },
+  { value: 'wrong_tone', label: 'Wrong tone' },
+  { value: 'too_long', label: 'Too long' },
+];
+
 export default function Coaching() {
   const { id, moveId } = useParams();
 
@@ -22,6 +29,11 @@ export default function Coaching() {
   const [lineSent, setLineSent] = useState(false);
   const [lineNote, setLineNote] = useState('');
   const [error, setError] = useState('');
+
+  // Feedback UI: which message's reason-chip row is currently open (at most
+  // one at a time). Purely transient — not persisted, doesn't affect the
+  // rating itself.
+  const [reasonPromptFor, setReasonPromptFor] = useState(null);
 
   const [showCoachingHint] = useState(() => {
     const seen = localStorage.getItem('seenCoachingHint') === 'true';
@@ -223,13 +235,15 @@ export default function Coaching() {
         ...(noteText ? { userNote: noteText } : {}),
       });
 
-      // data = { text, demonstrations: [{from, moves, startFen}] }
+      // data = { messageId, text, demonstrations: [{from, moves, startFen}] }
       const coachMsg = {
-        id: `coach-${Date.now()}`,
+        id: data.messageId ?? `coach-${Date.now()}`,
         role: 'assistant',
         message_type: 'coach_response',
         content: data.text,
         move_data: { demonstrations: data.demonstrations || [] },
+        rating: null,
+        reason: null,
       };
       setMessages(prev => [...prev, coachMsg]);
 
@@ -351,18 +365,20 @@ export default function Coaching() {
         moveContext,
       });
 
-      // Server now returns { text, demonstrations }.
+      // Server now returns { messageId, text, demonstrations }.
       const coachText = data.text ?? data.reply ?? data.content ?? '';
       const demos = Array.isArray(data.demonstrations) ? data.demonstrations : [];
 
       setMessages(prev => [
         ...prev,
         {
-          id: `srv-${Date.now()}`,
+          id: data.messageId ?? `srv-${Date.now()}`,
           role: 'assistant',
           message_type: 'coach_response',
           content: coachText,
           move_data: { demonstrations: demos },
+          rating: null,
+          reason: null,
         },
       ]);
 
@@ -375,6 +391,61 @@ export default function Coaching() {
       setDraft(text);
     } finally {
       setSending(false);
+    }
+  }
+
+  function setMessageRating(messageId, rating, reason) {
+    setMessages(prev => prev.map(m => (
+      m.id === messageId ? { ...m, rating, reason } : m
+    )));
+  }
+
+  // One tap to rate. Tapping the already-active rating un-rates (toggle off)
+  // instead of re-submitting it. Switching from one rating to the other is a
+  // single tap on the new one — no need to un-rate first.
+  async function handleRate(messageId, rating) {
+    const current = messages.find(m => m.id === messageId);
+    if (!current || typeof messageId !== 'number') return;
+
+    if (current.rating === rating) {
+      setMessageRating(messageId, null, null);
+      if (reasonPromptFor === messageId) setReasonPromptFor(null);
+      try {
+        await api.delete(`/coach/feedback/${messageId}`);
+      } catch (err) {
+        console.error('[feedback] un-rate failed:', err);
+        setMessageRating(messageId, current.rating, current.reason);
+      }
+      return;
+    }
+
+    const previous = { rating: current.rating, reason: current.reason };
+    setMessageRating(messageId, rating, rating === 'down' ? current.reason : null);
+    if (rating === 'down') setReasonPromptFor(messageId);
+    else if (reasonPromptFor === messageId) setReasonPromptFor(null);
+
+    try {
+      await api.post('/coach/feedback', { messageId, rating });
+    } catch (err) {
+      console.error('[feedback] rate failed:', err);
+      setMessageRating(messageId, previous.rating, previous.reason);
+    }
+  }
+
+  // Reason chips are an optional refinement on an existing thumbs-down —
+  // picking one updates the same rating row rather than creating anything new.
+  async function handleReason(messageId, reason) {
+    const current = messages.find(m => m.id === messageId);
+    if (!current) return;
+    const previousReason = current.reason;
+    const nextReason = current.reason === reason ? null : reason; // tap again to clear
+
+    setMessageRating(messageId, 'down', nextReason);
+    try {
+      await api.post('/coach/feedback', { messageId, rating: 'down', reason: nextReason });
+    } catch (err) {
+      console.error('[feedback] reason update failed:', err);
+      setMessageRating(messageId, 'down', previousReason);
     }
   }
 
@@ -450,6 +521,7 @@ export default function Coaching() {
 
     if (m.role === 'assistant') {
       const demos = m.move_data?.demonstrations || [];
+      const canRate = typeof m.id === 'number';
       return (
         <div key={key} className="chat-msg assistant" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span className="role">coach</span>
@@ -461,6 +533,50 @@ export default function Coaching() {
             >
               ▶ Show demonstration
             </button>
+          )}
+          {canRate && (
+            <div className="feedback-row">
+              <button
+                type="button"
+                className={`feedback-btn up${m.rating === 'up' ? ' active up' : ''}`}
+                aria-label={m.rating === 'up' ? 'Remove helpful rating' : 'Mark as helpful'}
+                aria-pressed={m.rating === 'up'}
+                onClick={() => handleRate(m.id, 'up')}
+              >
+                👍
+              </button>
+              <button
+                type="button"
+                className={`feedback-btn down${m.rating === 'down' ? ' active down' : ''}`}
+                aria-label={m.rating === 'down' ? 'Remove not-helpful rating' : 'Mark as not helpful'}
+                aria-pressed={m.rating === 'down'}
+                onClick={() => handleRate(m.id, 'down')}
+              >
+                👎
+              </button>
+            </div>
+          )}
+          {canRate && m.rating === 'down' && reasonPromptFor === m.id && (
+            <div className="reason-chips">
+              {REASON_CHIPS.map((chip) => (
+                <button
+                  key={chip.value}
+                  type="button"
+                  className={`reason-chip${m.reason === chip.value ? ' selected' : ''}`}
+                  onClick={() => handleReason(m.id, chip.value)}
+                >
+                  {chip.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="reason-dismiss"
+                aria-label="Dismiss"
+                onClick={() => setReasonPromptFor(null)}
+              >
+                ✕
+              </button>
+            </div>
           )}
         </div>
       );

@@ -204,4 +204,122 @@ router.post('/principles', async (req, res) => {
   res.status(201).json({ ok: true, id });
 });
 
+// ── Coach feedback review ─────────────────────────────────────────────────────
+// The point of collecting thumbs up/down: a dev/admin-facing view of exactly
+// what was rated badly and why, with enough context to actually use it as a
+// labeled example (the response text, the flagged move, and the conversation
+// leading up to it). Friends-and-family scale — a queryable endpoint, not a
+// polished UI.
+
+// GET /admin/feedback?rating=down&limit=50
+// Returns rated coach messages with full context: the response text, the
+// flagged move, the game, and every conversation turn up to and including
+// the rated message (so you can see what led to it).
+router.get('/feedback', async (req, res) => {
+  const rating = req.query.rating === 'up' ? 'up' : req.query.rating === 'all' ? null : 'down';
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
+
+  const params = [];
+  let where = '';
+  if (rating) {
+    params.push(rating);
+    where = `WHERE cf.rating = $${params.length}`;
+  }
+  params.push(limit);
+
+  const rows = (await query(
+    `SELECT
+       cf.id AS feedback_id, cf.rating, cf.reason, cf.created_at AS rated_at, cf.user_id,
+       c.id AS message_id, c.content AS response_text, c.created_at AS message_created_at, c.move_id,
+       m.move, m.classification, m.principle_violated, m.fen,
+       g.id AS game_id, g.opponent
+     FROM coach_feedback cf
+     JOIN conversations c ON c.id = cf.message_id
+     JOIN moves m ON m.id = c.move_id
+     JOIN games g ON g.id = m.game_id
+     ${where}
+     ORDER BY cf.created_at DESC
+     LIMIT $${params.length}`,
+    params
+  )).rows;
+
+  // Friends-and-family scale: one query per row for the leading conversation
+  // is fine here — this is a review endpoint, not a hot path.
+  const results = [];
+  for (const row of rows) {
+    const conversation = (await query(
+      `SELECT role, content, message_type, created_at
+       FROM conversations
+       WHERE move_id = $1 AND created_at <= $2
+       ORDER BY created_at`,
+      [row.move_id, row.message_created_at]
+    )).rows;
+
+    results.push({
+      feedbackId: row.feedback_id,
+      rating: row.rating,
+      reason: row.reason,
+      ratedAt: row.rated_at,
+      userId: row.user_id,
+      message: { id: row.message_id, content: row.response_text, createdAt: row.message_created_at },
+      move: {
+        id: row.move_id,
+        move: row.move,
+        classification: row.classification,
+        principleViolated: row.principle_violated,
+        fen: row.fen,
+      },
+      game: { id: row.game_id, opponent: row.opponent },
+      conversation,
+    });
+  }
+
+  res.json(results);
+});
+
+// GET /admin/feedback/stats
+// Aggregate signal: total up/down, down-rate, breakdown by reason chip, and a
+// daily up/down time series (last 30 days) so the down-rate is trackable
+// over time, not just a pile of individual reports.
+router.get('/feedback/stats', async (req, res) => {
+  const totals = (await query(
+    `SELECT rating, COUNT(*)::int AS n FROM coach_feedback GROUP BY rating`
+  )).rows;
+  const totalUp = totals.find((r) => r.rating === 'up')?.n || 0;
+  const totalDown = totals.find((r) => r.rating === 'down')?.n || 0;
+  const total = totalUp + totalDown;
+
+  const reasonRows = (await query(
+    `SELECT reason, COUNT(*)::int AS n FROM coach_feedback WHERE rating = 'down' GROUP BY reason`
+  )).rows;
+  const byReason = { unclear: 0, not_helpful: 0, wrong_tone: 0, too_long: 0, none: 0 };
+  for (const r of reasonRows) byReason[r.reason || 'none'] = r.n;
+
+  const dailyRows = (await query(
+    `SELECT date_trunc('day', created_at)::date AS day, rating, COUNT(*)::int AS n
+     FROM coach_feedback
+     WHERE created_at >= NOW() - INTERVAL '30 days'
+     GROUP BY day, rating
+     ORDER BY day`
+  )).rows;
+  const byDay = new Map();
+  for (const r of dailyRows) {
+    const key = r.day.toISOString().slice(0, 10);
+    if (!byDay.has(key)) byDay.set(key, { day: key, up: 0, down: 0 });
+    byDay.get(key)[r.rating] = r.n;
+  }
+  const overTime = [...byDay.values()].map((d) => ({
+    ...d,
+    downRate: d.up + d.down > 0 ? d.down / (d.up + d.down) : null,
+  }));
+
+  res.json({
+    totalUp,
+    totalDown,
+    downRate: total > 0 ? totalDown / total : null,
+    byReason,
+    overTime,
+  });
+});
+
 module.exports = router;

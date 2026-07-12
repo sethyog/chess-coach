@@ -225,6 +225,25 @@ async function initDb() {
       console.log('Migration: added conversations.move_data');
     }
 
+    // ── coach_feedback ───────────────────────────────────────────────────────
+    // Thumbs up/down on a coach response. message_id IS conversations.id —
+    // no parallel id scheme. UNIQUE(user_id, message_id) means re-rating is
+    // an upsert, not a new row (one tap to rate, a second tap to switch/undo).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS coach_feedback (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        rating TEXT NOT NULL CHECK (rating IN ('up', 'down')),
+        reason TEXT CHECK (reason IN ('unclear', 'not_helpful', 'wrong_tone', 'too_long')),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (user_id, message_id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (message_id) REFERENCES conversations(id)
+      )
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS player_profile (
         id SERIAL PRIMARY KEY,

@@ -432,6 +432,74 @@ select:focus {
   min-height: 44px;
   max-height: 140px;
 }
+
+/* Quiet feedback affordance on coach messages — muted until touched, never
+   competes with the coaching text above it. */
+.feedback-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+}
+.feedback-btn {
+  background: none;
+  border: none;
+  padding: 3px 6px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.feedback-btn:hover {
+  opacity: 1;
+}
+.feedback-btn.active.up {
+  opacity: 1;
+  color: var(--gold);
+}
+.feedback-btn.active.down {
+  opacity: 1;
+  color: var(--red);
+}
+.reason-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.reason-chip {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.reason-chip:hover {
+  border-color: var(--gold-dim);
+  color: var(--text);
+}
+.reason-chip.selected {
+  border-color: var(--red);
+  color: var(--red);
+}
+.reason-dismiss {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 3px 4px;
+  opacity: 0.6;
+}
+.reason-dismiss:hover {
+  opacity: 1;
+}
 .typing {
   align-self: flex-start;
   color: var(--text-dim);
