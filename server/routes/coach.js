@@ -196,6 +196,25 @@ function getPriorDemoFacts(history) {
   return null;
 }
 
+// Persists the prose-backstop's per-response counts so a time-bucketed RATE
+// is computable later (coach-health endpoint) instead of living only in
+// stdout logs. Deliberately fire-and-forget from the caller's perspective —
+// this function never throws and is never awaited on the response path, so
+// a telemetry failure can neither slow nor break the coaching turn (rule 7).
+// One row per coach response, even when both counts are zero, so
+// total_responses is a real denominator for the rate.
+async function recordCoachTelemetry({ userId, messageId, violations, sequenceHits }) {
+  try {
+    await query(
+      `INSERT INTO coach_telemetry (user_id, message_id, violations_count, sequence_hits_count, violations, sequence_hits)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, messageId, violations.length, sequenceHits.length, JSON.stringify(violations), JSON.stringify(sequenceHits)]
+    );
+  } catch (err) {
+    console.error('[coach-telemetry] Failed to persist telemetry for message %s:', messageId, err.message);
+  }
+}
+
 // Convert a white-POV centipawn score to a plain-English description.
 function cpToPlainLanguage(cp) {
   if (cp == null) return 'unclear';
@@ -740,6 +759,14 @@ router.post('/conversation/:moveId', async (req, res) => {
       [moveId, 'assistant', finalText, moveData ? JSON.stringify(moveData) : null]
     )).rows[0];
 
+    // Fire-and-forget: never awaited on the response path, never throws.
+    recordCoachTelemetry({
+      userId: req.user.id,
+      messageId: inserted.id,
+      violations: backstop.violations,
+      sequenceHits: backstop.sequenceHits,
+    });
+
     res.json({ messageId: inserted.id, text: finalText, demonstrations: groundedDemos });
   } catch (e) {
     return res.status(500).json({ error: e.message });
@@ -994,6 +1021,14 @@ router.post('/conversation/:moveId/line', async (req, res) => {
       "INSERT INTO conversations (move_id, role, content, message_type, move_data) VALUES ($1, $2, $3, 'coach_response', $4) RETURNING id",
       [moveId, 'assistant', finalText, JSON.stringify(moveData)]
     )).rows[0];
+
+    // Fire-and-forget: never awaited on the response path, never throws.
+    recordCoachTelemetry({
+      userId: req.user.id,
+      messageId: inserted.id,
+      violations: backstop.violations,
+      sequenceHits: backstop.sequenceHits,
+    });
 
     res.json({ messageId: inserted.id, text: finalText, demonstrations: groundedDemos });
   } catch (e) {

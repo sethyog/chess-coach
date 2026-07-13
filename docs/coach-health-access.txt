@@ -1,0 +1,156 @@
+ACCESSING COACH QUALITY DATA (coach-health, feedback review)
+===============================================================
+
+What this covers
+-----------------
+Three coach-quality signals, and how to query them:
+
+  1. VIOLATIONS   (correctness) — prose-backstop's mutating catches. An
+                   impossible claim the coach made that got stripped before
+                   the user saw it. Source: coach_telemetry.violations_count.
+  2. SEQUENCEHITS (compliance)  — prose-backstop's log-only check: the coach
+                   narrated a multi-move sequence in prose (soft violation,
+                   not harmful). Source: coach_telemetry.sequence_hits_count.
+  3. THUMBS       (quality)     — human up/down judgment on coach responses,
+                   plus down-reason chips. Source: coach_feedback.
+
+All three are Level 1: queryable endpoints only, no dashboard UI, no
+alerting. Everything below is either a curl-able JSON endpoint or a SQL
+query you run directly against Postgres.
+
+
+Prerequisite: admin access
+---------------------------
+Every endpoint below is mounted under /api/admin, gated by isAuthenticated +
+isAdmin (server.js:145). To get admin:
+
+  1. Set ADMIN_EMAIL in the server's .env to your Google account's email.
+  2. Log in through the normal Google OAuth flow with that account.
+  3. server.js:122-129 grants role='admin' automatically on that login —
+     this is the ONLY path to admin. There is no manual SQL step.
+
+Confirm it worked: GET /api/admin/me should return {"role": "admin", ...}.
+A non-admin (or logged-out) request to any /api/admin/* route gets 403 (or
+401 if not logged in at all) — never partial/filtered data.
+
+
+Endpoint 1 — GET /api/admin/coach-health   (the unified view)
+----------------------------------------------------------------
+The one-stop signal: all three metrics, bucketed by time, most recent
+bucket first. This is the "is the coach regressing" check.
+
+Query params (all optional):
+  bucket   'day' | 'week'   default 'week'
+  from     ISO date         default: 30 days back (day) / 12 weeks back (week)
+  to       ISO date         default: now
+
+Example:
+  curl -b "connect.sid=<your session cookie>" \
+    'https://<server>/api/admin/coach-health?bucket=week'
+
+Response shape:
+  {
+    "bucket": "week",
+    "from": "...", "to": "...",
+    "buckets": [
+      {
+        "bucket": "2026-07-06",              // ISO date, start of that bucket
+        "totalResponses": 7,                  // denominator for the rates below
+        "violations":   { "total": 1, "rate": 0.143 },
+        "sequenceHits": { "total": 2, "rate": 0.286 },
+        "thumbs": {
+          "up": 1, "down": 2, "downRate": 0.667,
+          "byReason": { "unclear": 0, "not_helpful": 1, "wrong_tone": 1,
+                         "too_long": 0, "none": 0 }
+        }
+      },
+      { "bucket": "2026-06-22", ... }         // older buckets follow
+    ]
+  }
+
+READ IT AS A TREND, NOT A TOTAL. A single bucket's numbers mean little;
+what matters is the rate changing bucket-to-bucket. E.g. violations.rate
+going from 0 two weeks ago to 0.14 this week is a regression signal — a new
+code path is bypassing the facts discipline (the recurring bug class this
+whole system exists to catch). A rate that stays near zero for weeks is the
+healthy baseline.
+
+"total": 1 by itself is not informative — always compare it to the
+adjacent bucket's rate, not to a lifetime count.
+
+
+Endpoint 2 — GET /api/admin/feedback   (thumbs-down drill-down)
+--------------------------------------------------------------------
+When coach-health's thumbs signal shows a spike, this is where you go to
+read the actual bad responses with context — the labeled examples for
+improving the coach.
+
+Query params (all optional):
+  rating   'up' | 'down' | 'all'   default 'down'
+  limit    integer, 1-500          default 50
+
+Example:
+  curl -b "connect.sid=<your session cookie>" \
+    'https://<server>/api/admin/feedback?rating=down&limit=20'
+
+Each item includes: the coach's response text, the flagged move (SAN,
+classification, principle violated, FEN), the game (id, opponent), the
+reason chip if given, and the full conversation leading up to that message.
+
+
+Endpoint 3 — GET /api/admin/feedback/stats   (thumbs aggregate only)
+------------------------------------------------------------------------
+A narrower, thumbs-only aggregate: total up/down, overall down-rate,
+down-reason breakdown, and a fixed 30-day daily time series. Predates
+coach-health and still works, but for a unified cross-signal view with
+choice of day/week bucketing, prefer /api/admin/coach-health — its
+"thumbs" field covers the same ground.
+
+Example:
+  curl -b "connect.sid=<your session cookie>" \
+    'https://<server>/api/admin/feedback/stats'
+
+
+Direct SQL (for ad hoc drill-down beyond what the endpoints return)
+------------------------------------------------------------------------
+Both tables are small (one row per coach response / per rating) and safe to
+query directly with psql against the production DATABASE_URL.
+
+  -- Raw violation text for manual review, most recent first:
+  SELECT ct.created_at, ct.message_id, c.content AS response_text,
+         ct.violations, ct.sequence_hits
+    FROM coach_telemetry ct
+    JOIN conversations c ON c.id = ct.message_id
+   WHERE ct.violations_count > 0
+   ORDER BY ct.created_at DESC
+   LIMIT 20;
+
+  -- Same idea for thumbs-down, joined to the flagged move:
+  SELECT cf.created_at, cf.reason, c.content AS response_text,
+         m.move, m.classification
+    FROM coach_feedback cf
+    JOIN conversations c ON c.id = cf.message_id
+    JOIN moves m ON m.id = c.move_id
+   WHERE cf.rating = 'down'
+   ORDER BY cf.created_at DESC
+   LIMIT 20;
+
+  -- Per-user down-rate (coach_feedback.user_id is denormalized for exactly
+  -- this kind of query, no joins needed):
+  SELECT user_id,
+         COUNT(*) FILTER (WHERE rating = 'down')::float / COUNT(*) AS down_rate,
+         COUNT(*) AS total_ratings
+    FROM coach_feedback
+   GROUP BY user_id
+   ORDER BY down_rate DESC;
+
+
+Where this data comes from (for context, not required reading to use it)
+------------------------------------------------------------------------
+  server/prose-backstop.js       — computes violations/sequenceHits per reply
+  server/routes/coach.js         — recordCoachTelemetry() persists them
+                                    (fire-and-forget; a telemetry failure
+                                    never breaks or slows a coaching reply)
+  server/routes/coach.js         — POST/DELETE /coach/feedback persists thumbs
+  server/routes/admin.js         — the three endpoints documented above
+  server/db.js                   — coach_telemetry / coach_feedback schemas

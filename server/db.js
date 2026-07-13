@@ -244,6 +244,28 @@ async function initDb() {
       )
     `);
 
+    // ── coach_telemetry ──────────────────────────────────────────────────────
+    // One row per coach response (correctness/compliance signal), written
+    // from the prose-backstop path alongside its existing stdout logging —
+    // this is what makes a time-bucketed RATE computable instead of only
+    // living in ephemeral logs. message_id IS conversations.id, same
+    // identifier coach_feedback uses. Always inserted (even 0/0 counts) so
+    // total_responses is a true denominator for the rate.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS coach_telemetry (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        violations_count INTEGER NOT NULL DEFAULT 0,
+        sequence_hits_count INTEGER NOT NULL DEFAULT 0,
+        violations JSONB,
+        sequence_hits JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (message_id) REFERENCES conversations(id)
+      )
+    `);
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS player_profile (
         id SERIAL PRIMARY KEY,

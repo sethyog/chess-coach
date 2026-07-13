@@ -322,4 +322,104 @@ router.get('/feedback/stats', async (req, res) => {
   });
 });
 
+// ── Coach health (Level 1: queryable view, no dashboard) ─────────────────────
+// Unifies the three coach-quality signals, time-bucketed, in one response:
+//   1. violations   — prose-backstop's mutating catches (correctness). A rate
+//                      spike signals a new code path bypassing the facts
+//                      discipline — the recurring bug class.
+//   2. sequenceHits  — prose-backstop's log-only sequence-depth check
+//                      (compliance, soft Part-1 violation, not harmful).
+//   3. thumbs        — human up/down judgment (quality no automated check
+//                      captures), plus down-reason breakdown.
+// The point is the TREND: a rate change across buckets, not a lifetime total
+// (see coach_telemetry for the persisted per-response counts this reads).
+const COACH_HEALTH_BUCKETS = new Set(['day', 'week']);
+
+router.get('/coach-health', async (req, res) => {
+  const bucket = COACH_HEALTH_BUCKETS.has(req.query.bucket) ? req.query.bucket : 'week';
+
+  const now = new Date();
+  const defaultFrom = new Date(now);
+  if (bucket === 'day') defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 30);
+  else defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 12 * 7);
+
+  const from = req.query.from ? new Date(req.query.from) : defaultFrom;
+  const to = req.query.to ? new Date(req.query.to) : now;
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return res.status(400).json({ error: 'from/to must be valid dates' });
+  }
+
+  const telemetryRows = (await query(
+    `SELECT date_trunc($1, created_at) AS bucket,
+            COUNT(*)::int AS total_responses,
+            COALESCE(SUM(violations_count), 0)::int AS violations_total,
+            COALESCE(SUM(sequence_hits_count), 0)::int AS sequence_hits_total
+       FROM coach_telemetry
+      WHERE created_at >= $2 AND created_at < $3
+      GROUP BY bucket`,
+    [bucket, from, to]
+  )).rows;
+
+  const thumbsRows = (await query(
+    `SELECT date_trunc($1, created_at) AS bucket, rating, COUNT(*)::int AS n
+       FROM coach_feedback
+      WHERE created_at >= $2 AND created_at < $3
+      GROUP BY bucket, rating`,
+    [bucket, from, to]
+  )).rows;
+
+  const reasonRows = (await query(
+    `SELECT date_trunc($1, created_at) AS bucket, reason, COUNT(*)::int AS n
+       FROM coach_feedback
+      WHERE rating = 'down' AND created_at >= $2 AND created_at < $3
+      GROUP BY bucket, reason`,
+    [bucket, from, to]
+  )).rows;
+
+  const bucketKey = (d) => d.toISOString().slice(0, 10);
+  const buckets = new Map();
+  function getBucket(key) {
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        bucket: key,
+        totalResponses: 0,
+        violations: { total: 0, rate: null },
+        sequenceHits: { total: 0, rate: null },
+        thumbs: {
+          up: 0, down: 0, downRate: null,
+          byReason: { unclear: 0, not_helpful: 0, wrong_tone: 0, too_long: 0, none: 0 },
+        },
+      });
+    }
+    return buckets.get(key);
+  }
+
+  for (const row of telemetryRows) {
+    const b = getBucket(bucketKey(row.bucket));
+    b.totalResponses = row.total_responses;
+    b.violations.total = row.violations_total;
+    b.sequenceHits.total = row.sequence_hits_total;
+  }
+  for (const row of thumbsRows) {
+    const b = getBucket(bucketKey(row.bucket));
+    if (row.rating === 'up') b.thumbs.up = row.n;
+    else if (row.rating === 'down') b.thumbs.down = row.n;
+  }
+  for (const row of reasonRows) {
+    getBucket(bucketKey(row.bucket)).thumbs.byReason[row.reason || 'none'] = row.n;
+  }
+
+  const buckets_ = [...buckets.values()]
+    .map((b) => {
+      b.violations.rate = b.totalResponses > 0 ? b.violations.total / b.totalResponses : null;
+      b.sequenceHits.rate = b.totalResponses > 0 ? b.sequenceHits.total / b.totalResponses : null;
+      const thumbsTotal = b.thumbs.up + b.thumbs.down;
+      b.thumbs.downRate = thumbsTotal > 0 ? b.thumbs.down / thumbsTotal : null;
+      return b;
+    })
+    .sort((a, b) => (a.bucket < b.bucket ? 1 : -1)); // most recent bucket first
+
+  res.json({ bucket, from: from.toISOString(), to: to.toISOString(), buckets: buckets_ });
+});
+
 module.exports = router;
