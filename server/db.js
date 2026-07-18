@@ -48,7 +48,7 @@ async function columnExists(client, table, column) {
 const PRINCIPLES_SEED = [
   ['P01', 'Castle early to protect your king', 'Move the king to safety behind a pawn shield within the first 10-15 moves.', 'intermediate', 'king safety', 'Leaving the king on e1 past move 12 while developing other pieces.'],
   ['P02', 'Rooks belong on open files', 'Place rooks on files with no pawns so they project power down the board.', 'intermediate', 'rook placement', 'Keeping a rook on a1 behind a pawn chain when the e-file is open.'],
-  ['P03', "Don't create isolated or backward pawns", 'Pawn weaknesses become long-term targets and restrict piece mobility.', 'intermediate', 'pawn structure', 'Allowing an isolated d-pawn from a capture sequence without compensating piece activity.'],
+  ['P03', "Don't create isolated or backward pawns", 'Pawn weaknesses like isolated or backward pawns become long-term targets and restrict piece mobility — though an isolated pawn can grant open lines and active piece play while more pieces remain on the board, so weigh both sides before creating one.', 'intermediate', 'pawn structure', 'Allowing an isolated d-pawn from a capture sequence without compensating piece activity.'],
   ['P04', 'Complete development before attacking', 'Get all minor pieces out and the king castled before launching an attack.', 'intermediate', 'development', 'Sacrificing on f7 with one knight developed and rooks still on a1/h1.'],
   ['P05', 'Control the centre with pawns or pieces', 'Central squares (d4, e4, d5, e5) are the highest-leverage real estate on the board.', 'intermediate', 'centre control', 'Playing fianchettos on both sides without challenging d4 or e4.'],
   ['P06', "Don't move the same piece twice in the opening", 'Each opening tempo is precious; every move should bring a new piece into play.', 'intermediate', 'development', 'Playing Nf3 then retreating to g1 in the first 10 moves.'],
@@ -56,10 +56,10 @@ const PRINCIPLES_SEED = [
   ['P08', 'Avoid premature queen development', 'Bringing the queen out early invites tempo-losing attacks by minor pieces.', 'intermediate', 'development', 'Playing 2.Qh5 against a prepared opponent who chases it with ...Nf6 and ...g6.'],
   ['P09', 'Exploit outpost squares for your pieces', 'A knight on a strong outpost (d5, e5, d4, e4) is often more valuable than a bishop.', 'intermediate', 'piece activity', 'Trading off a knight that was about to land on a permanent d5 outpost.'],
   ['P10', 'Keep your pieces coordinated', 'Pieces working together attack and defend more efficiently than scattered pieces.', 'intermediate', 'piece coordination', 'Pushing a flank attack while your queenside pieces sit on their original squares.'],
-  ['P11', 'Trade pieces when ahead in material', 'Simplification converts a material advantage by clearing a path to the endgame.', 'intermediate', 'endgame basics', 'Avoiding a queen trade when up a pawn in a balanced position.'],
+  ['P11', 'Trade pieces when ahead in material', "Simplification converts a material advantage by clearing a path to the endgame — prefer trading pieces over pawns when ahead, to reduce your opponent's counterplay while keeping your structural advantages intact.", 'intermediate', 'endgame basics', 'Avoiding a queen trade when up a pawn in a balanced position.'],
   ['P12', 'Avoid pins that restrict your piece activity', 'A pinned piece cannot move freely and becomes a target; recognise pins before they cost material.', 'intermediate', 'tactical awareness', 'Allowing Bb5 pinning a knight to the king, then playing a move that needs that knight.'],
   ['P13', "Don't block your own bishops with pawns", "Bishops need diagonals; pawns on the bishop's colour suffocate it.", 'intermediate', 'piece activity', 'Playing e3 then b3 and caging in the dark-square bishop.'],
-  ['P14', 'Activate your king in the endgame', "Once queens are off the board, the king is a fighting piece and belongs in the action.", 'intermediate', 'endgame basics', "Keeping the king on g1 while the opponent's king reaches e4 in a pawn endgame."],
+  // P14 retired — duplicate of P27 ("Route the endgame king to key squares"); see the retirement migration below.
   ['P15', 'Avoid doubled pawns without compensation', 'Doubled pawns lose flexibility unless they open a file or control key squares.', 'intermediate', 'pawn structure', 'Recapturing with the f-pawn instead of the queen and getting nothing for the doubled f-pawn.'],
   ['P16', "Check for opponent's threats before moving", "Every move, ask what the opponent now attacks — missing a one-mover threat costs games.", 'intermediate', 'tactical awareness', 'Playing a developing move while ignoring a piece your opponent just attacked.'],
   ['P17', 'Look for forcing moves first — checks, captures, threats', "Forcing moves limit the opponent's replies and reveal tactics faster than quiet moves.", 'intermediate', 'tactical awareness', 'Playing a slow positional move when Bxh7+ wins material.'],
@@ -71,6 +71,277 @@ const PRINCIPLES_SEED = [
   ['P23', 'Match piece type to pawn structure', 'Bishops thrive in open positions; knights prefer closed ones. Trade your worse-suited piece.', 'intermediate', 'piece activity', 'Trading a knight for a bishop in a locked pawn structure.'],
   ['P24', "Don't push pawns in front of a castled king without strong reason", "Pawn moves near the king create permanent weaknesses; verify there's a concrete need first.", 'intermediate', 'king safety', 'Playing h3 to prevent a future Bg4 when no bishop is threatening that square.'],
   ['P25', "Don't release pawn tension prematurely", "Capturing or pushing a tense pawn locks in the structure; keep options open until you understand the position.", 'intermediate', 'pawn structure', 'Playing cxd5 when the tension favored you, simplifying things for the opponent.'],
+];
+
+// BEGINNER_PRINCIPLES_SEED — level: 'beginner'
+// Continues the shared `principles` table ID sequence from P29 (production
+// has P01–P28; P28 already covers "develop minor pieces before rooks" at
+// level=beginner, so that entry is intentionally omitted here to avoid a
+// duplicate). Same shape as PRINCIPLES_SEED: [id, name, description, level,
+// category, examples]
+const BEGINNER_PRINCIPLES_SEED = [
+  // --- Piece Safety & Tactical Awareness ---
+  ['P29', 'Check for hanging pieces before moving',
+    'Before playing a move, check whether it leaves any of your pieces undefended or able to be captured for free.',
+    'beginner', 'piece safety',
+    'Moving a pawn away from a piece it was protecting, leaving that piece hanging.'],
+
+  ['P30', 'Scan for threats after every move',
+    'After any move — yours or your opponent\'s — pause and scan the whole board for new checks, captures, and threats before deciding what to do next.',
+    'beginner', 'piece safety',
+    'Missing that the opponent\'s last move opened an attack on your queen.'],
+
+  ['P31', 'Don\'t hang pieces in bad trades',
+    'Don\'t move a piece to a square where it can be captured for free, or captured for less value than it\'s worth.',
+    'beginner', 'piece safety',
+    'Placing a knight on a square attacked by a pawn, losing it for nothing.'],
+
+  ['P32', 'Ask what your opponent\'s move threatens',
+    'When your opponent makes a move, ask what new threat it creates before you respond with your own plan.',
+    'beginner', 'piece safety',
+    'Ignoring that the opponent\'s bishop move now attacks a rook.'],
+
+  ['P33', 'Watch for pins',
+    'Recognize when one of your pieces is pinned (can\'t move without exposing a more valuable piece behind it) and avoid moving it carelessly.',
+    'beginner', 'tactical patterns',
+    'Moving a pinned knight and losing the queen behind it.'],
+
+  ['P34', 'Watch for forks',
+    'Watch for a single enemy move that attacks two of your pieces at once, since you can usually only save one.',
+    'beginner', 'tactical patterns',
+    'Allowing an enemy knight to fork the king and rook.'],
+
+  ['P35', 'Watch for back-rank weaknesses',
+    'Notice when your king has no escape square on the back rank, since a single rook or queen check along that rank can be checkmate.',
+    'beginner', 'tactical patterns',
+    'Never making a "luft" pawn move, allowing a back-rank mate later in the game.'],
+
+  // --- Opening Principles ---
+  ['P36', 'Control the center early',
+    'Occupy or influence the central squares (e4, d4, e5, d5) early, since central pieces control more of the board.',
+    'beginner', 'opening principles',
+    'Playing e4 or d4 as an opening move.'],
+
+  ['P37', 'Don\'t move the same piece twice without reason',
+    'Avoid moving the same piece a second time in the opening unless there\'s a concrete reason — every extra move is a tempo you\'re not developing another piece.',
+    'beginner', 'opening principles',
+    'Shuffling a knight back and forth instead of developing a new piece.'],
+
+  ['P38', 'Limit unnecessary pawn moves in the opening',
+    'Beyond what\'s needed for center control and development, avoid making extra pawn moves early — each one delays getting your pieces out.',
+    'beginner', 'opening principles',
+    'Pushing several side pawns instead of developing pieces.'],
+
+  ['P39', 'Don\'t bring your queen out too early',
+    'Avoid developing your queen early, since it can be attacked and chased by minor pieces, costing you time.',
+    'beginner', 'opening principles',
+    'Playing an early queen sortie that gets kicked by a knight or bishop, losing tempo.'],
+
+  ['P40', 'Castle within the first 10 moves',
+    'Aim to castle relatively early in most games to get your king to safety and connect your rooks.',
+    'beginner', 'opening principles',
+    'Delaying castling too long and getting caught with the king in the center.'],
+
+  // --- King Safety ---
+  ['P41', 'Castle for king safety',
+    'Castling tucks your king away from the center and connects your rooks — do it in most games unless there\'s a clear reason not to.',
+    'beginner', 'king safety',
+    'Failing to castle and getting the king caught in the center after lines open.'],
+
+  ['P42', 'Don\'t weaken your king\'s pawn shelter without reason',
+    'Avoid pushing the pawns in front of your castled king unless there\'s a concrete tactical or strategic reason.',
+    'beginner', 'king safety',
+    'Pushing the g-pawn near a castled king for no reason, creating attackable weaknesses.'],
+
+  ['P43', 'Don\'t leave your king in the center as lines open',
+    'Once files and diagonals start opening up (pieces traded, pawns exchanged), an uncastled king in the center becomes dangerous.',
+    'beginner', 'king safety',
+    'Delaying castling while the center opens, exposing the king to checks.'],
+
+  // --- Material & Trade Evaluation ---
+  ['P44', 'Know standard piece values',
+    'Know the standard relative values of the pieces (pawn=1, knight/bishop≈3, rook=5, queen=9) and use them to judge whether a trade is good.',
+    'beginner', 'material evaluation',
+    'Trading a rook for a bishop without realizing it\'s a material loss.'],
+
+  ['P45', 'Count material before and after a trade',
+    'Before trading pieces, count what you\'re giving up and what you\'re getting to confirm the trade doesn\'t lose material.',
+    'beginner', 'material evaluation',
+    'Initiating a series of captures without checking who comes out ahead.'],
+
+  ['P46', 'Don\'t trade down in value without reason',
+    'Avoid trading a more valuable piece for a less valuable one unless there\'s a clear tactical or positional reason.',
+    'beginner', 'material evaluation',
+    'Trading a queen for a rook with no compensation.'],
+
+  // --- Basic Checkmate Patterns ---
+  ['P47', 'Recognize the back-rank mate pattern',
+    'Learn to spot the back-rank checkmate pattern — a king trapped behind its own pawns, delivered mate by a rook or queen on the back rank.',
+    'beginner', 'checkmate patterns',
+    'Delivering (or falling to) a rook check on the 8th/1st rank with no escape square.'],
+
+  ['P48', 'Learn king-and-queen vs. king checkmate technique',
+    'Learn the basic technique for checkmating a lone king with king and queen.',
+    'beginner', 'checkmate patterns',
+    'Boxing in the enemy king with the queen and finishing with the king\'s support.'],
+
+  ['P49', 'Learn king-and-rook vs. king checkmate technique',
+    'Learn the basic technique for checkmating a lone king with king and rook.',
+    'beginner', 'checkmate patterns',
+    'Using the rook to cut off the king\'s rank/file while your king approaches.'],
+
+  // --- Basic Endgame Technique ---
+  ['P50', 'Activate your king in the endgame',
+    'Once queens and many pieces are traded off, your king becomes a strong piece — bring it toward the center or the action.',
+    'beginner', 'endgame technique',
+    'Leaving the king on the back rank in a king-and-pawn ending instead of centralizing it.'],
+
+  ['P51', 'Learn the square rule for passed pawns',
+    'Learn the "square rule" — a quick way to judge whether a lone pawn can outrun the enemy king to promotion.',
+    'beginner', 'endgame technique',
+    'Pushing a passed pawn without checking if the enemy king can catch it.'],
+
+  ['P52', 'Understand the opposition',
+    'Learn the opposition — when kings face each other with one square between them, the player NOT forced to move controls the key squares.',
+    'beginner', 'endgame technique',
+    'Losing a won king-and-pawn ending by giving away the opposition.'],
+
+  ['P53', 'Know that rook-pawn endings are special',
+    'Recognize that endings with only a rook pawn (a-file/h-file) are often drawn even when they look winning, because the defending king can reach the corner.',
+    'beginner', 'endgame technique',
+    'Assuming an extra rook pawn is automatically winning when it may be a theoretical draw.'],
+
+  ['P54', 'Value passed pawns in the endgame',
+    'Recognize that a passed pawn (no enemy pawn can stop it on its file or adjacent files) is a major endgame asset — advance it or use your king to escort it.',
+    'beginner', 'endgame technique',
+    'Ignoring a passed pawn instead of pushing or supporting it.'],
+
+  // --- Practical Habits ---
+  ['P55', 'Use a simple move checklist',
+    'Before playing a move, run a simple checklist: is anything of mine hanging, what does my opponent threaten, and does my move address it.',
+    'beginner', 'practical habits',
+    'Playing a natural-looking move without checking for hanging pieces or threats.'],
+
+  ['P56', 'Slow down on critical moves',
+    'Take extra time on sharp or unclear positions rather than moving on instinct.',
+    'beginner', 'practical habits',
+    'Blitzing out a move in a complicated position and missing a tactic.'],
+
+  ['P57', 'Don\'t give up in difficult positions',
+    'Avoid resigning or playing carelessly in "lost" positions — many still have practical chances, especially if the opponent also has to find precise moves.',
+    'beginner', 'practical habits',
+    'Resigning a worse-but-not-lost position instead of setting practical problems.'],
+];
+
+// INTERMEDIATE_ADDITIONS_SEED — level: 'intermediate'
+// Continues the shared `principles` table ID sequence from P58 (after the
+// beginner tier above ends at P57). Same shape as PRINCIPLES_SEED:
+// [id, name, description, level, category, examples]
+const INTERMEDIATE_ADDITIONS_SEED = [
+  ['P58', 'Hanging pawns are double-edged',
+    'A pawn pair with no pawns behind or beside them can be a dynamic strength if they advance, or a long-term liability if blockaded.',
+    'intermediate', 'pawn structure',
+    'Leaving hanging pawns fixed in place for many moves, letting the opponent blockade and target them.'],
+  ['P59', 'Play the minority attack',
+    'Advance pawns on the side where you have fewer pawns than your opponent to provoke a structural weakness in their majority.',
+    'intermediate', 'pawn structure',
+    'Missing the b4-b5 minority attack plan in a Carlsbad-type structure.'],
+  ['P60', 'Target the base of a pawn chain',
+    'The base of a pawn chain cannot be defended by another pawn, making it the critical point to attack or defend.',
+    'intermediate', 'pawn structure',
+    'Attacking the tip of a pawn chain instead of its undefendable base.'],
+  ['P61', 'Prioritize activity over material when unclear',
+    'In unclear positions, an active piece can outweigh a small material deficit — don\'t default to material count alone.',
+    'intermediate', 'piece activity',
+    'Returning material to simplify into a passive but "safe" position instead of keeping active piece play.'],
+  ['P62', 'Infiltrate the 7th/2nd rank with a rook',
+    'A rook on the opponent\'s 7th (or your 2nd) rank attacks pawns and restricts the enemy king — look for chances to get one there.',
+    'intermediate', 'rook placement',
+    'Trading off the rook that had a clear path to the 7th rank instead of activating it.'],
+  ['P63', 'Blockade a dangerous enemy passed pawn',
+    'Use a knight or well-placed piece to blockade an advanced or dangerous enemy passed pawn before it becomes unstoppable.',
+    'intermediate', 'pawn structure',
+    'Allowing an enemy passed pawn to advance unblockaded until it queens or ties down major pieces.'],
+  ['P64', 'Consider overprotection (a debated idea)',
+    'Some strong players recommend guarding a key strategic square or pawn beyond its immediate defensive need, to free your other pieces to maneuver without losing control of that point. This idea is debated among strong players and coaches — treat it as one lens, not a rule to apply rigidly.',
+    'intermediate', 'piece coordination',
+    'Ignoring a key central point entirely once it seems "defended enough," losing flexibility later.'],
+  ['P65', 'Use a space advantage to restrict mobility',
+    'A space advantage limits the opponent\'s piece mobility — use it to cramp their position rather than letting it go to waste.',
+    'intermediate', 'space',
+    'Having more space but making passive moves that let the opponent untangle.'],
+  ['P66', 'Be cautious trading with a space advantage',
+    'More space favors keeping more pieces on the board to make use of it — be cautious about trading down when you have a space edge.',
+    'intermediate', 'space',
+    'Trading pieces freely despite having a cramping space advantage, easing the opponent\'s position.'],
+  ['P67', 'Treat the initiative as an asset',
+    'Being the side dictating the game\'s pace (the initiative) is a real asset — consider concrete or material investments to keep it.',
+    'intermediate', 'initiative',
+    'Handing back the initiative with a slow move instead of maintaining pressure.'],
+  ['P68', 'Seek counterplay from a passive position',
+    'When your position is passive, look for a plan to generate counterplay rather than only defending.',
+    'intermediate', 'initiative',
+    'Playing purely defensively for many moves with no attempt to create counter-chances.'],
+  ['P69', 'Fianchetto for the long diagonal',
+    'Fianchettoing a bishop gives it a long, flexible diagonal from a safe square — consider it as a development option.',
+    'intermediate', 'piece activity',
+    'Developing a bishop to a passive square when a fianchetto would give it a strong long diagonal.'],
+  ['P70', 'Race pawn storms after opposite-side castling',
+    'When kings are castled on opposite sides, the game often becomes a race — prioritize your own pawn storm and attack speed over slower plans.',
+    'intermediate', 'king safety',
+    'Playing slow positional moves in an opposite-side-castling position where speed decides the game.'],
+  ['P71', 'Count attackers before sacrificing into a king',
+    'Before sacrificing material to expose the enemy king, count the attacking pieces that follow up, not just the piece given up.',
+    'intermediate', 'tactical awareness',
+    'Sacrificing a bishop on h7/f7 without enough remaining attackers to follow through.'],
+  ['P72', 'Let king safety override other advantages',
+    'Recognize when your own king safety justifies giving up some other advantage (tempo, structure) to address it.',
+    'intermediate', 'king safety',
+    'Continuing a queenside plan while ignoring a serious threat building against your own king.'],
+  ['P73', 'Recognize deflection',
+    'Deflection forces a defending piece away from its critical duty, opening up what it was protecting.',
+    'intermediate', 'tactical awareness',
+    'Missing a deflecting sacrifice that pulls away the defender of a key square or piece.'],
+  ['P74', 'Recognize decoy',
+    'A decoy lures a piece onto a square where it becomes vulnerable to a follow-up tactic.',
+    'intermediate', 'tactical awareness',
+    'Not seeing that a check forces the king onto a square where a fork follows.'],
+  ['P75', 'Recognize overloading',
+    'An overloaded defender is responsible for guarding more than it can actually cover — exploit or avoid creating this.',
+    'intermediate', 'tactical awareness',
+    'Relying on one piece to defend two things at once without noticing the overload.'],
+  ['P76', 'Recognize interference',
+    'Interference blocks the line between a defender and what it defends, breaking the defensive connection.',
+    'intermediate', 'tactical awareness',
+    'Missing an interfering move that cuts a defender off from its target.'],
+  ['P77', 'Recognize zwischenzug',
+    'A zwischenzug (in-between move) inserts a stronger threat before completing an expected sequence — watch for it on both sides.',
+    'intermediate', 'tactical awareness',
+    'Automatically recapturing instead of checking for a stronger in-between move first.'],
+  ['P78', 'Recognize x-ray attacks/defenses',
+    'Pieces aligned through an enemy piece on the same line can attack or defend "through" it — watch for these hidden connections.',
+    'intermediate', 'tactical awareness',
+    'Missing that a queen defends a bishop through an enemy piece via x-ray.'],
+  ['P79', 'Recognize a trapped piece',
+    'A piece with no safe square to retreat to is vulnerable regardless of its nominal value — look to exploit (or avoid creating) this.',
+    'intermediate', 'tactical awareness',
+    'Chasing an enemy piece into what looks like activity but is actually a trap with no escape.'],
+  ['P80', 'Recognize discovered attacks and double checks',
+    'A discovered attack (including a discovered or double check) is often more powerful than the moving piece\'s own threat — watch for these on both sides.',
+    'intermediate', 'tactical awareness',
+    'Moving a piece without noticing it discovers a devastating attack from another piece behind it.'],
+  ['P81', 'When behind, complicate and keep pieces on',
+    'When you\'re worse, look to complicate the position and keep pieces on the board rather than simplifying into a clearly worse endgame.',
+    'intermediate', 'endgame basics',
+    'Trading into a lost endgame instead of keeping tension and practical chances alive.'],
+  ['P82', 'Trade to fix an opponent\'s weakness, not just to relieve pressure',
+    'Before trading, consider whether it locks in a real target in the opponent\'s position, versus simply relieving your own pressure without gaining anything concrete.',
+    'intermediate', 'pawn structure',
+    'Trading pieces to "simplify" a tense position without checking whether it actually fixes a target or just eases the opponent\'s defense.'],
+  ['P83', 'Evaluate structure and activity before any trade',
+    'Before any trade — not just when ahead in material — weigh the resulting pawn structure and piece activity, not just material equality.',
+    'intermediate', 'piece activity',
+    'Trading a pair of knights without noticing it hands the opponent a much better resulting structure.'],
 ];
 
 const PRINCIPLE_THEMES_SEED = [
@@ -87,7 +358,6 @@ const PRINCIPLE_THEMES_SEED = [
   ['P11', 'endgame'], ['P11', 'advantage'],
   ['P12', 'pin'],
   ['P13', 'middlegame'], ['P13', 'bishopEndgame'],
-  ['P14', 'endgame'], ['P14', 'pawnEndgame'],
   ['P15', 'middlegame'], ['P15', 'pawnEndgame'],
   ['P16', 'hangingPiece'], ['P16', 'fork'],
   ['P17', 'fork'], ['P17', 'pin'], ['P17', 'skewer'], ['P17', 'doubleCheck'], ['P17', 'discoveredAttack'],
@@ -316,6 +586,30 @@ async function initDb() {
       console.log(`Migration: seeded ${PRINCIPLES_SEED.length} principles`);
     }
 
+    // Row-level ON CONFLICT DO NOTHING (rather than the table-wide COUNT(*)
+    // guard above) so this still seeds correctly on databases where
+    // PRINCIPLES_SEED already ran and P26–P28 already exist out-of-band.
+    for (const row of BEGINNER_PRINCIPLES_SEED) {
+      await client.query(
+        'INSERT INTO principles (id, name, description, level, category, examples) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING',
+        row
+      );
+    }
+    console.log(`Migration: seeded ${BEGINNER_PRINCIPLES_SEED.length} beginner principles (id range P29-P57)`);
+
+    for (const row of INTERMEDIATE_ADDITIONS_SEED) {
+      await client.query(
+        'INSERT INTO principles (id, name, description, level, category, examples) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING',
+        row
+      );
+    }
+    console.log(`Migration: seeded ${INTERMEDIATE_ADDITIONS_SEED.length} intermediate principles (id range P58-P83)`);
+
+    // P03/P11 description backfill is a one-off correction, not permanent
+    // startup logic — run server/migrations/backfill-p03-p11-descriptions.js
+    // manually once instead of re-asserting these on every restart (which
+    // would silently clobber any future manual edit to either description).
+
     // ── principle_themes ─────────────────────────────────────────────────────
     await client.query(`
       CREATE TABLE IF NOT EXISTS principle_themes (
@@ -404,6 +698,10 @@ async function initDb() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_candidates_lower_name ON principle_candidates(LOWER(suggested_name))`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_candidates_status ON principle_candidates(status)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_candidates_routing ON principle_candidates(routing)`);
+
+    // P14 retirement (duplicate of P27) is a one-off cleanup, not permanent
+    // reference-data seeding — run server/migrations/retire-p14.js manually
+    // once instead of baking a delete-and-no-op into every startup.
 
     // ── coaching_facts ───────────────────────────────────────────────────────
     await client.query(`
