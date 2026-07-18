@@ -131,6 +131,14 @@ function fmtEvalCp(cp) {
   return `${cp} cp (white POV)`;
 }
 
+// principleName is optional context (e.g. resolved from a pattern-analysis
+// match) — append it for LLM readability when present, since a bare id like
+// "P02" means nothing to the model on its own.
+function formatPrincipleViolated(principleViolated, principleName) {
+  if (!principleViolated) return 'none identified yet';
+  return principleName ? `${principleViolated} - ${principleName}` : principleViolated;
+}
+
 // Renders the prior turn's grounded demonstration(s) as an additional
 // verified-facts block (Part 2 of the board-hallucination fix). Empty string
 // when there's nothing to show — callers can splice this in unconditionally.
@@ -156,7 +164,7 @@ function formatPriorDemoFactsForPrompt(priorDemoFacts) {
 // block as the sole source of board truth.
 // engineLevel: current ENGINE_CONSULTATION_LEVEL (for tool section wording).
 // includeLineDemos: true when the current turn is a line submission (enables demo instructions).
-function buildVerifiedFactsPrompt({ facts, profile, principleViolated, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [], userNote = null, priorDemoFacts = [] }) {
+function buildVerifiedFactsPrompt({ facts, profile, principleViolated, principleName = null, currentTurn, maxTurns, forceAnswer, engineLevel = 'LOW', includeLineDemos = false, enginePv = [], userNote = null, priorDemoFacts = [] }) {
   const level = profile?.computed_level || 'intermediate';
   const isFinalTurn = currentTurn >= maxTurns;
 
@@ -203,7 +211,7 @@ ${indentedPieceMap}
  - Engine's preferred move: ${facts.engine.bestMove ?? 'not yet computed'}
  - Engine's principal variation from the before-position (verified by chess.js, up to 4 plies): ${enginePv.length ? enginePv.join(', ') : 'not available'}
  - Why it was a mistake (engine-derived summary): ${facts.engine.engineReason}
- - Principle violated: ${principleViolated || 'none identified yet'}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
+ - Principle violated: ${formatPrincipleViolated(principleViolated, principleName)}${includeLineDemos ? '\n - Student line validation: every move in the student\'s submitted line was validated by chess.js before reaching you — all moves are legal.' : ''}
 ${intentSection}${formatPriorDemoFactsForPrompt(priorDemoFacts)}
 STRICT RULES:
  - Treat the verified facts as absolute truth; never contradict them.
@@ -258,6 +266,7 @@ function buildDegradedPrompt({
   classification,
   centipawnLoss,
   principleViolated,
+  principleName = null,
   currentTurn,
   maxTurns,
   forceAnswer,
@@ -284,7 +293,7 @@ LIMITED FACTS:
  - Move under review (SAN): ${moveSan}
  - Engine classification: ${classification || 'unknown'}
  - Centipawn loss: ${centipawnLoss ?? 'unknown'}
- - Principle violated: ${principleViolated || 'none identified yet'}
+ - Principle violated: ${formatPrincipleViolated(principleViolated, principleName)}
 
 STRICT RULES:
  - You do NOT have a verified piece map or legal-move list.

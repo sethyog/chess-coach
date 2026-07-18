@@ -306,6 +306,61 @@ async function getOwnedCoachMessage(messageId, userId) {
 
 const FEEDBACK_REASONS = new Set(['unclear', 'not_helpful', 'wrong_tone', 'too_long']);
 
+// moves.principle_violated is never populated by the per-move analysis pipeline
+// (always inserted null — see analysis.js/games.js). The only place a principle
+// ever gets assigned to a specific move is the batch pattern-analysis job, whose
+// results.patterns[].movesViolating[] links back to moves.id. This scans a
+// user's completed batches (most recent first) for a match, following the same
+// pattern_analyses/analysis_batches join progression.js already uses.
+async function getPatternPrincipleForMove(moveId, userId) {
+  const { rows } = await query(
+    `SELECT pa.results
+       FROM pattern_analyses pa
+       JOIN analysis_batches ab ON ab.id = pa.batch_id
+      WHERE pa.user_id = $1 AND ab.status = 'completed'
+      ORDER BY pa.batch_number DESC`,
+    [userId]
+  );
+  for (const row of rows) {
+    let results;
+    try { results = JSON.parse(row.results); } catch { continue; }
+    for (const pattern of results.patterns || []) {
+      if (pattern.movesViolating?.some((mv) => mv.moveId === moveId)) {
+        return { principleId: pattern.principleId, principleName: pattern.principleName };
+      }
+    }
+  }
+  return null;
+}
+
+// Shared move fetch + principle resolution used by both /conversation/:moveId
+// and /conversation/:moveId/line. Falls back to the pattern-analysis match
+// above when moves.principle_violated is null; leaves principleName null
+// otherwise (moves.principle_violated is free text, not an id needing a name).
+async function getMoveContext(moveId, userId) {
+  const moveRow = (await query(
+    `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
+            m.classification, m.centipawn_loss, m.principle_violated,
+            m.best_move, m.eval_before, m.eval_after, g.pgn
+       FROM moves m
+       JOIN games g ON g.id = m.game_id
+      WHERE m.id = $1`,
+    [moveId]
+  )).rows[0];
+  if (!moveRow) return null;
+
+  let principleViolated = moveRow.principle_violated;
+  let principleName = null;
+  if (!principleViolated) {
+    const match = await getPatternPrincipleForMove(moveRow.id, userId);
+    if (match) {
+      principleViolated = match.principleId;
+      principleName = match.principleName;
+    }
+  }
+  return { ...moveRow, principleViolated, principleName };
+}
+
 // ── Core pattern analysis ─────────────────────────────────────────────────────
 // Shared function used by both the legacy /patterns route and the format-aware
 // /patterns/batch route. Throws on mapping failure so callers can handle the
@@ -371,10 +426,12 @@ async function runPatternAnalysis(userId, {
 
   const profile = (await query('SELECT * FROM player_profile WHERE user_id = $1', [userId])).rows[0];
   const level = profile?.computed_level || 'intermediate';
-  let principles = (await query('SELECT * FROM principles WHERE level = $1 ORDER BY id', [level])).rows;
-  if (principles.length === 0) {
-    principles = (await query('SELECT * FROM principles ORDER BY id')).rows;
-  }
+  // Classification matches against every principle regardless of level —
+  // real batches mix skill-tier mistakes, and a wrong level tag on the
+  // player's profile shouldn't corrupt every mapping in the batch. `level`
+  // still flows into logCandidate() and the coach summary below as a tone
+  // hint; it just no longer gates which principles are eligible here.
+  const principles = (await query('SELECT * FROM principles ORDER BY id')).rows;
 
   const principlesBlock = principles.map(p => `${p.id}: ${p.name} — ${p.description}`).join('\n');
   const movesBlock = moves.map(m => `Game ${m.game_id} Move ${m.move_number} (${m.move}) — ${m.classification}`).join('\n');
@@ -536,15 +593,7 @@ router.post('/conversation/:moveId', async (req, res) => {
   const maxTurns = MAX_TURNS_BY_LEVEL[level] ?? DEFAULT_MAX_TURNS;
   const forceAnswer = detectForceAnswer(message);
 
-  const moveRow = (await query(
-    `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
-            m.classification, m.centipawn_loss, m.principle_violated,
-            m.best_move, m.eval_before, m.eval_after, g.pgn
-       FROM moves m
-       JOIN games g ON g.id = m.game_id
-      WHERE m.id = $1`,
-    [moveId]
-  )).rows[0];
+  const moveRow = await getMoveContext(moveId, req.user.id);
 
   // Compute the before-position FEN (where the player made their choice).
   // 'original' demonstrations must start here, not from the after-position stored in moves.fen.
@@ -620,7 +669,8 @@ router.post('/conversation/:moveId', async (req, res) => {
     ? buildVerifiedFactsPrompt({
         facts,
         profile,
-        principleViolated: moveRow?.principle_violated,
+        principleViolated: moveRow?.principleViolated,
+        principleName: moveRow?.principleName,
         currentTurn,
         maxTurns,
         forceAnswer,
@@ -633,7 +683,8 @@ router.post('/conversation/:moveId', async (req, res) => {
         moveSan: moveRow?.move,
         classification: moveRow?.classification,
         centipawnLoss: moveRow?.centipawn_loss,
-        principleViolated: moveRow?.principle_violated,
+        principleViolated: moveRow?.principleViolated,
+        principleName: moveRow?.principleName,
         currentTurn,
         maxTurns,
         forceAnswer,
@@ -840,15 +891,7 @@ router.post('/conversation/:moveId/line', async (req, res) => {
   // as typing that phrase in chat — it triggers the escalation-ladder bailout.
   const forceAnswer = trimmedNote ? detectForceAnswer(trimmedNote) : false;
 
-  const moveRow = (await query(
-    `SELECT m.id, m.game_id, m.move_number, m.move, m.fen,
-            m.classification, m.centipawn_loss, m.principle_violated,
-            m.best_move, m.eval_before, m.eval_after, g.pgn
-       FROM moves m
-       JOIN games g ON g.id = m.game_id
-      WHERE m.id = $1`,
-    [moveId]
-  )).rows[0];
+  const moveRow = await getMoveContext(moveId, req.user.id);
 
   // Build (or read cached) verified facts.
   let facts = null;
@@ -908,7 +951,8 @@ router.post('/conversation/:moveId/line', async (req, res) => {
     ? buildVerifiedFactsPrompt({
         facts,
         profile,
-        principleViolated: moveRow?.principle_violated,
+        principleViolated: moveRow?.principleViolated,
+        principleName: moveRow?.principleName,
         currentTurn,
         maxTurns,
         forceAnswer,
@@ -923,7 +967,8 @@ router.post('/conversation/:moveId/line', async (req, res) => {
         moveSan: moveRow?.move,
         classification: moveRow?.classification,
         centipawnLoss: moveRow?.centipawn_loss,
-        principleViolated: moveRow?.principle_violated,
+        principleViolated: moveRow?.principleViolated,
+        principleName: moveRow?.principleName,
         currentTurn,
         maxTurns,
         forceAnswer,
