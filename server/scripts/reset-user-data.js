@@ -22,6 +22,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // Deletion order respects FK constraints (children before parents).
 // Each step can optionally specify a join path to filter by user_id.
 const STEPS = [
+  { table: 'coach_telemetry',         desc: 'coach telemetry data',          userIdColumn: 'user_id' },
+  { table: 'coach_feedback',          desc: 'coach feedback',                userIdColumn: 'user_id' },
   { table: 'conversations',           desc: 'coaching conversations',        viaTable: 'moves' },
   { table: 'coaching_facts',          desc: 'cached coaching facts',         viaTable: 'moves' },
   { table: 'moves',                   desc: 'game moves',                    viaTable: 'games' },
