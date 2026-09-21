@@ -22,9 +22,9 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // Deletion order respects FK constraints (children before parents).
 // Each step can optionally specify a join path to filter by user_id.
 const STEPS = [
-  { table: 'conversations',           desc: 'coaching conversations',        userIdColumn: 'user_id' },
-  { table: 'coaching_facts',          desc: 'cached coaching facts',         userIdColumn: 'user_id' },
-  { table: 'moves',                   desc: 'game moves',                    joinPath: 'moves.game_id = games.id' },
+  { table: 'conversations',           desc: 'coaching conversations',        viaTable: 'moves' },
+  { table: 'coaching_facts',          desc: 'cached coaching facts',         viaTable: 'moves' },
+  { table: 'moves',                   desc: 'game moves',                    viaTable: 'games' },
   { table: 'games',                   desc: 'imported games',                userIdColumn: 'user_id' },
   { table: 'pattern_analyses',        desc: 'pattern analysis results',      userIdColumn: 'user_id' },
   { table: 'analysis_batches',        desc: 'analysis batches',              userIdColumn: 'user_id' },
@@ -32,7 +32,7 @@ const STEPS = [
   { table: 'progression_summaries',   desc: 'cached progression summaries',  userIdColumn: 'user_id' },
   { table: 'player_profile',          desc: 'player profiles',               userIdColumn: 'user_id' },
   { table: 'principle_candidate_users', desc: 'candidate attribution links', userIdColumn: 'user_id' },
-  { table: 'principle_candidates',    desc: 'unreviewed principle candidates', joinPath: 'principle_candidates.id = principle_candidate_users.candidate_id' },
+  { table: 'principle_candidates',    desc: 'unreviewed principle candidates', viaCandidateUsers: true },
 ];
 
 async function main() {
@@ -62,7 +62,7 @@ async function main() {
     }
 
     // Count rows first so the user can see what will be affected.
-    for (const { table, desc, userIdColumn, joinPath } of STEPS) {
+    for (const { table, desc, userIdColumn, viaTable, viaCandidateUsers } of STEPS) {
       let countQuery;
       let params = [];
 
@@ -71,20 +71,31 @@ async function main() {
           // Simple case: table has user_id column
           countQuery = `SELECT COUNT(*)::int AS n FROM ${table} WHERE ${userIdColumn} = $1`;
           params = [userId];
-        } else if (joinPath) {
+        } else if (viaTable) {
           // Complex case: need to join through another table
-          if (table === 'moves') {
-            countQuery = `SELECT COUNT(*)::int AS n FROM moves 
+          if (viaTable === 'games') {
+            // moves -> games
+            countQuery = `SELECT COUNT(*)::int AS n FROM ${table} 
                          WHERE game_id IN (SELECT id FROM games WHERE user_id = $1)`;
             params = [userId];
-          } else if (table === 'principle_candidates') {
-            countQuery = `SELECT COUNT(*)::int AS n FROM principle_candidates pc
-                         WHERE EXISTS (
-                           SELECT 1 FROM principle_candidate_users pcu 
-                           WHERE pcu.candidate_id = pc.id AND pcu.user_id = $1
+          } else if (viaTable === 'moves') {
+            // conversations, coaching_facts -> moves -> games
+            countQuery = `SELECT COUNT(*)::int AS n FROM ${table} 
+                         WHERE move_id IN (
+                           SELECT id FROM moves WHERE game_id IN (
+                             SELECT id FROM games WHERE user_id = $1
+                           )
                          )`;
             params = [userId];
           }
+        } else if (viaCandidateUsers) {
+          // principle_candidates via principle_candidate_users
+          countQuery = `SELECT COUNT(*)::int AS n FROM ${table} pc
+                       WHERE EXISTS (
+                         SELECT 1 FROM principle_candidate_users pcu 
+                         WHERE pcu.candidate_id = pc.id AND pcu.user_id = $1
+                       )`;
+          params = [userId];
         } else {
           // Skip tables that can't be filtered by user
           countQuery = `SELECT 0::int AS n`;
@@ -113,7 +124,7 @@ async function main() {
     await client.query('BEGIN');
 
     let totalDeleted = 0;
-    for (const { table, desc, userIdColumn, joinPath } of STEPS) {
+    for (const { table, desc, userIdColumn, viaTable, viaCandidateUsers } of STEPS) {
       let deleteQuery;
       let params = [];
 
@@ -122,20 +133,31 @@ async function main() {
           // Simple case: table has user_id column
           deleteQuery = `DELETE FROM ${table} WHERE ${userIdColumn} = $1`;
           params = [userId];
-        } else if (joinPath) {
+        } else if (viaTable) {
           // Complex case: need to filter via subquery
-          if (table === 'moves') {
-            deleteQuery = `DELETE FROM moves 
+          if (viaTable === 'games') {
+            // moves -> games
+            deleteQuery = `DELETE FROM ${table} 
                           WHERE game_id IN (SELECT id FROM games WHERE user_id = $1)`;
             params = [userId];
-          } else if (table === 'principle_candidates') {
-            deleteQuery = `DELETE FROM principle_candidates 
-                          WHERE id IN (
-                            SELECT candidate_id FROM principle_candidate_users 
-                            WHERE user_id = $1
+          } else if (viaTable === 'moves') {
+            // conversations, coaching_facts -> moves -> games
+            deleteQuery = `DELETE FROM ${table} 
+                          WHERE move_id IN (
+                            SELECT id FROM moves WHERE game_id IN (
+                              SELECT id FROM games WHERE user_id = $1
+                            )
                           )`;
             params = [userId];
           }
+        } else if (viaCandidateUsers) {
+          // principle_candidates via principle_candidate_users
+          deleteQuery = `DELETE FROM ${table} 
+                        WHERE id IN (
+                          SELECT candidate_id FROM principle_candidate_users 
+                          WHERE user_id = $1
+                        )`;
+          params = [userId];
         } else {
           // Skip tables that can't be filtered by user
           continue;
